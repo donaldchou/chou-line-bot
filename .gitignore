@@ -41,3 +41,5 @@ yarn-error.log*
 next-env.d.ts
 
 農場管理*.*
+
+/ll3/dist/
