@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { LineLogo } from "../admin/_ui/icons";
 
 const field = "min-h-11 rounded-[10px] border border-field px-3.5 text-base font-normal";
 
@@ -46,7 +47,9 @@ export default function LoginPage() {
     <main className="flex min-h-dvh items-center justify-center bg-ground px-4">
       <form onSubmit={submit} className="flex w-full max-w-sm flex-col gap-4 rounded-2xl border border-line bg-white p-7">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-10 w-10 items-center justify-center rounded-[10px] bg-linegreen font-bold text-white">周</div>
+          <div className="flex h-10 w-10 items-center justify-center rounded-[10px] bg-linegreen">
+            <LineLogo />
+          </div>
           <div className="flex flex-col">
             <h1 className="text-lg font-bold">周家農場 LINE 客服後台</h1>
             <span className="text-sm text-mute">{setup ? "第一次使用：建立管理者帳號" : "請用 email 和密碼登入"}</span>

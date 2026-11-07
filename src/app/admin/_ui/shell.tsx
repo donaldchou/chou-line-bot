@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { pageHref, pageLabel, pageOfPath, SYSTEM_HREF, USER_PAGES } from "@/lib/page-access";
-import { Icon, type IconName } from "./icons";
+import { Icon, LineLogo, type IconName } from "./icons";
 import { logout, useMe } from "./me";
 
 /* 左側選單（照 chou-platform 的 app-shell：桌機浮動、可收合成只剩圖示、分組可展開收合；手機用抽屜） */
@@ -109,9 +109,9 @@ export function Shell({ children }: { children: ReactNode }) {
           onClick={() => (mini ? setCollapsed(false) : toggleAllGroups(groups.map((g) => g.group)))}
           title={mini ? "展開選單" : allClosed ? "全部展開" : "全部收合"}
           aria-label={mini ? "展開選單" : allClosed ? "全部展開" : "全部收合"}
-          className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-linegreen text-[15px] font-bold text-white hover:bg-[#05b14c]"
+          className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-linegreen hover:bg-[#05b14c]"
         >
-          周
+          <LineLogo />
         </button>
         {!mini && (
           <div className="min-w-0">

@@ -136,3 +136,18 @@ export function Icon({ name, size = 20, className }: { name: IconName; size?: nu
     </svg>
   );
 }
+
+/** LINE 圖示：白色對話泡泡＋綠色「LINE」字，放在綠色方塊上 */
+export function LineLogo({ size = 26 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" className="shrink-0">
+      <path
+        fill="#fff"
+        d="M12 2.5C6.2 2.5 1.5 6.3 1.5 11c0 4.2 3.7 7.7 8.8 8.4.3.1.8.2.9.5.1.3.1.7 0 1l-.1.9c0 .3-.2 1 .9.5 1.1-.5 6-3.5 8.2-6 1.5-1.7 2.3-3.4 2.3-5.3 0-4.7-4.7-8.5-10.5-8.5Z"
+      />
+      <text x="12" y="13.6" textAnchor="middle" fill="#06C755" fontSize="5.6" fontWeight="800" fontFamily="Arial, Helvetica, sans-serif">
+        LINE
+      </text>
+    </svg>
+  );
+}
