@@ -1,5 +1,5 @@
 import { connectDB } from "./mongodb";
-import { LineUser, OrderDraft, type LineUserDoc, type OrderDraftDoc } from "./models";
+import { AlertLog, LineUser, OrderDraft, type LineUserDoc, type OrderDraftDoc } from "./models";
 import { push, textMsg } from "./line";
 import { confirmCard, productCarousel } from "./flex";
 import { getProducts, isSys, SYS_INFO } from "./ll3";
@@ -13,7 +13,11 @@ const pauseUntil = () => new Date(Date.now() + PAUSE_H * 3600_000);
 
 export class ActionError extends Error {}
 
-export async function customerAction(id: string, body: Record<string, unknown>) {
+/** 「需要你處理」標成處理完（紀錄留著算處理時間） */
+const closeAlerts = (userId: string, how: "reply" | "resolve", by?: string) =>
+  AlertLog.updateMany({ userId, resolvedAt: null }, { $set: { resolvedAt: new Date(), how, by } });
+
+export async function customerAction(id: string, body: Record<string, unknown>, by?: string) {
   await connectDB();
   const u = await LineUser.findById(id).lean<LineUserDoc>();
   if (!u) throw new ActionError("找不到這位客戶");
@@ -29,6 +33,7 @@ export async function customerAction(id: string, body: Record<string, unknown>) 
       await logMessage(id, "model", text, "admin");
       // 真人回覆後機器人先暫停，避免兩邊搶著回；12 小時後自動恢復
       await LineUser.updateOne({ _id: id }, { $set: { alert: null, botPausedUntil: pauseUntil() } });
+      await closeAlerts(id, "reply", by);
       return { ok: true };
     }
     case "products": {
@@ -58,6 +63,7 @@ export async function customerAction(id: string, body: Record<string, unknown>) 
       return { ok: true };
     case "resolve":
       await LineUser.updateOne({ _id: id }, { $set: { alert: null } });
+      await closeAlerts(id, "resolve", by);
       return { ok: true };
     case "remind": {
       if (u.blocked) throw new ActionError("客人已封鎖官方帳號，傳不出去");

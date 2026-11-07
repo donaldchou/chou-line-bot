@@ -8,6 +8,10 @@ export interface LineUserDoc {
   pictureUrl?: string;
   blocked: boolean;
   lastMessageAt?: Date;
+  /** 問過的品項（分群用，只增不減） */
+  asked?: string[];
+  /** 最近一次收到群發的時間（7 天內不再群發） */
+  lastBroadcastAt?: Date | null;
   /** 最近一次詢問商品（還沒下單）：每 6 小時關心一次，最多 2 次 */
   interest?: { sys: Sys; at: Date } | null;
   followups: number;
@@ -45,6 +49,8 @@ const LineUserSchema = new Schema<LineUserDoc>(
     pictureUrl: String,
     blocked: { type: Boolean, default: false },
     lastMessageAt: Date,
+    asked: { type: [String], default: undefined },
+    lastBroadcastAt: { type: Date, default: null },
     interest: { type: new Schema({ sys: String, at: Date }, { _id: false }), default: null },
     followups: { type: Number, default: 0 },
     lastFollowupAt: { type: Date, default: null },
@@ -164,7 +170,141 @@ const NotifyLogSchema = new Schema(
   { versionKey: false },
 );
 
-export const LineUser = (models.LineUser as Model<LineUserDoc>) || model<LineUserDoc>("LineUser", LineUserSchema, "lineUsers");
+/** 「需要你處理」的紀錄：處理完也留著，用來算轉真人比例、處理時間 */
+export interface AlertLogDoc {
+  userId: string;
+  kind: AlertKind;
+  text: string;
+  at: Date;
+  resolvedAt: Date | null;
+  /** reply＝真人回覆、resolve＝按「已處理」 */
+  how?: "reply" | "resolve";
+  by?: string;
+}
+const AlertLogSchema = new Schema<AlertLogDoc>(
+  {
+    userId: { type: String, required: true },
+    kind: { type: String, required: true },
+    text: { type: String, default: "" },
+    at: { type: Date, default: () => new Date() },
+    resolvedAt: { type: Date, default: null },
+    how: String,
+    by: String,
+  },
+  { versionKey: false },
+);
+AlertLogSchema.index({ at: -1 });
+AlertLogSchema.index({ userId: 1, resolvedAt: 1 });
+export const AlertLog =
+  (models.AlertLog as Model<AlertLogDoc>) || model<AlertLogDoc>("AlertLog", AlertLogSchema, "alertLogs");
+
+/** 接單設定：每個品項（_id = "sys:貨號"） */
+export interface ProductSettingDoc {
+  _id: string;
+  sys: string;
+  productId: string;
+  /** open＝接單中、full＝本週額滿、stop＝停止接單 */
+  status: "open" | "full" | "stop";
+  /** 每週上限盒數（LINE 訂單），null＝不限 */
+  cap: number | null;
+  updatedAt: Date;
+  updatedBy?: string;
+}
+const ProductSettingSchema = new Schema<ProductSettingDoc>(
+  {
+    _id: { type: String, required: true },
+    sys: { type: String, required: true },
+    productId: { type: String, required: true },
+    status: { type: String, default: "open" },
+    cap: { type: Number, default: null },
+    updatedAt: { type: Date, default: () => new Date() },
+    updatedBy: String,
+  },
+  { versionKey: false },
+);
+export const ProductSetting =
+  (models.ProductSetting as Model<ProductSettingDoc>) ||
+  model<ProductSettingDoc>("ProductSetting", ProductSettingSchema, "productSettings");
+
+/** 群發訊息 */
+export interface BroadcastDoc {
+  _id: string;
+  /** 分群（"all"＝全部好友） */
+  segs: string[];
+  text: string;
+  /** 附上的產品卡片：kaki / peach */
+  cards: string[];
+  orderButton: boolean;
+  status: "scheduled" | "sending" | "sent" | "failed" | "cancelled";
+  scheduledAt: Date;
+  sentAt?: Date | null;
+  /** 實際傳出的對象（送出時才決定） */
+  userIds: string[];
+  sent: number;
+  failed: number;
+  error?: string;
+  createdBy: string;
+  createdAt: Date;
+}
+const BroadcastSchema = new Schema<BroadcastDoc>(
+  {
+    _id: { type: String, required: true },
+    segs: [String],
+    text: { type: String, default: "" },
+    cards: [String],
+    orderButton: { type: Boolean, default: false },
+    status: { type: String, default: "scheduled" },
+    scheduledAt: { type: Date, required: true },
+    sentAt: { type: Date, default: null },
+    userIds: { type: [String], default: [] },
+    sent: { type: Number, default: 0 },
+    failed: { type: Number, default: 0 },
+    error: String,
+    createdBy: { type: String, default: "" },
+    createdAt: { type: Date, default: () => new Date() },
+  },
+  { versionKey: false },
+);
+BroadcastSchema.index({ status: 1, scheduledAt: 1 });
+export const Broadcast =
+  (models.Broadcast as Model<BroadcastDoc>) || model<BroadcastDoc>("Broadcast", BroadcastSchema, "broadcasts");
+
+/** 後台登入帳號（密碼只存 scrypt 雜湊；輸出前一定要用 publicUser() 拿掉） */
+export interface AdminUserDoc {
+  _id: string;
+  email: string;
+  passwordHash: string;
+  name: string;
+  role: "admin" | "user";
+  active: boolean;
+  /** 一般使用者：在「一般使用者可以看的頁面」之外，這個帳號另外看不到的頁面 */
+  hiddenPages: string[];
+  lastLoginAt: Date | null;
+  createdAt: Date;
+}
+const AdminUserSchema = new Schema<AdminUserDoc>(
+  {
+    _id: { type: String, required: true },
+    email: { type: String, required: true, unique: true, trim: true, lowercase: true },
+    passwordHash: { type: String, required: true },
+    name: { type: String, default: "" },
+    role: { type: String, enum: ["admin", "user"], default: "user" },
+    active: { type: Boolean, default: true },
+    hiddenPages: { type: [String], default: [] },
+    lastLoginAt: { type: Date, default: null },
+    createdAt: { type: Date, default: () => new Date() },
+  },
+  { versionKey: false },
+);
+
+/** 後台設定（_id = 設定名稱，例如 pageAccess） */
+const AdminSettingSchema = new Schema({ _id: { type: String, required: true }, allowed: [String] }, { versionKey: false, strict: false });
+
+export const AdminUser =
+  (models.AdminUser as Model<AdminUserDoc>) || model<AdminUserDoc>("AdminUser", AdminUserSchema, "adminUsers");
+export const AdminSetting = models.AdminSetting || model("AdminSetting", AdminSettingSchema, "adminSettings");
+
+export const LineUser =(models.LineUser as Model<LineUserDoc>) || model<LineUserDoc>("LineUser", LineUserSchema, "lineUsers");
 export const ChatMessage =
   (models.ChatMessage as Model<ChatMessageDoc>) || model<ChatMessageDoc>("ChatMessage", ChatMessageSchema, "messages");
 export const OrderDraft =

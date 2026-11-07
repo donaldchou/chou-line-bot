@@ -41,6 +41,26 @@ export const reply = (replyToken: string, messages: LineMessage[]) => post("/mes
 export const push = (to: string, messages: LineMessage[]) =>
   post("/message/push", { to, messages: messages.slice(0, 5) }, { "X-Line-Retry-Key": crypto.randomUUID() });
 
+/** 群發：一次最多 500 人；每位收到的人算 1 則訊息（同一次最多 5 個訊息物件） */
+export const multicast = (to: string[], messages: LineMessage[], retryKey: string) =>
+  post("/message/multicast", { to: to.slice(0, 500), messages: messages.slice(0, 5) }, { "X-Line-Retry-Key": retryKey });
+
+/** 本月訊息額度：limit＝方案上限（null＝不限）、used＝本月已用 */
+export async function quota(): Promise<{ limit: number | null; used: number } | null> {
+  try {
+    const h = { authorization: `Bearer ${token()}` };
+    const [q, c] = await Promise.all(
+      ["/message/quota", "/message/quota/consumption"].map((p) =>
+        fetch(`${API}${p}`, { headers: h, signal: AbortSignal.timeout(10_000) }).then((r) => (r.ok ? r.json() : null)),
+      ),
+    );
+    if (!q || !c) return null;
+    return { limit: q.type === "limited" ? Number(q.value) : null, used: Number(c.totalUsage) || 0 };
+  } catch {
+    return null;
+  }
+}
+
 /** 先用 reply（免費）；reply token 過期或失敗時改用 push */
 export async function send(userId: string, replyToken: string | undefined, messages: LineMessage[]) {
   for (let i = 0; i < messages.length; i += 5) {

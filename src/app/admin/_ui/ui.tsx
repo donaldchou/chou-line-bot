@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { segOf, type SegKey } from "@/lib/segments";
 
 /* 後台共用：API 呼叫、輪詢、時間格式、進度標籤 */
 
@@ -142,6 +143,20 @@ export function ProdBadge({ sys, text }: { sys: string | null; text: string }) {
     <Badge bg={peach ? "#FBE6EE" : "#FCEBDA"} fg={peach ? "#93325A" : "#8F4708"} small>
       {text}
     </Badge>
+  );
+}
+
+/** 分群標籤 */
+export function SegBadges({ segs, small = true }: { segs: SegKey[]; small?: boolean }) {
+  if (!segs.length) return null;
+  return (
+    <span className="flex flex-wrap gap-1">
+      {segs.map((k) => (
+        <Badge key={k} bg={segOf(k).bg} fg={segOf(k).fg} small={small}>
+          {segOf(k).name}
+        </Badge>
+      ))}
+    </span>
   );
 }
 

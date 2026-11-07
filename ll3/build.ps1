@@ -40,15 +40,19 @@ foreach ($s in $systems) {
   # vieworder_suda.asp
   $vf = Join-Path (Join-Path $suda $s.code) 'vieworder_suda.asp'
   $v = $big5.GetString([IO.File]::ReadAllBytes($vf))
-  $inc = '<!-- #include file="buyer_config.asp" -->'
-  $anchor = '<div style="margin-top:14px; padding-top:10px; border-top:1px solid #F0DDA8">'
-  foreach ($a in $inc, $anchor) {
-    $n = ([regex]::Matches($v, [regex]::Escape($a))).Count
-    if ($n -ne 1) { throw "$($s.dir) vieworder_suda.asp 找到 $n 個「$a」（應為 1 個）" }
+  # 2026-11-07 起線上版（chou-suda-print 的 change_code 也同步了）已經加過 LINE 區塊：直接沿用
+  if ($v.Contains('line_config.asp')) {
+    if (-not $v.Contains('<%LineNotifyBox sudaNo%>')) { throw "$($s.dir) vieworder_suda.asp 有 line_config.asp 但沒有 LineNotifyBox" }
+  } else {
+    $inc = '<!-- #include file="buyer_config.asp" -->'
+    $anchor = '<div style="margin-top:14px; padding-top:10px; border-top:1px solid #F0DDA8">'
+    foreach ($a in $inc, $anchor) {
+      $n = ([regex]::Matches($v, [regex]::Escape($a))).Count
+      if ($n -ne 1) { throw "$($s.dir) vieworder_suda.asp 找到 $n 個「$a」（應為 1 個）" }
+    }
+    $v = $v.Replace($inc, $inc + "`r`n" + '<!-- #include file="line_config.asp" -->')
+    $v = $v.Replace($anchor, '<%LineNotifyBox sudaNo%>' + "`r`n`t  " + $anchor)
   }
-  if ($v.Contains('line_config.asp')) { throw "$($s.dir) vieworder_suda.asp 已經有 line_config.asp" }
-  $v = $v.Replace($inc, $inc + "`r`n" + '<!-- #include file="line_config.asp" -->')
-  $v = $v.Replace($anchor, '<%LineNotifyBox sudaNo%>' + "`r`n`t  " + $anchor)
   [IO.File]::WriteAllBytes((Join-Path $out 'vieworder_suda.asp'), $big5.GetBytes($v))
   Write-Output "$($s.dir)：完成 → $out"
 }

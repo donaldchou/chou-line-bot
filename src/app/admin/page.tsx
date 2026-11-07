@@ -135,6 +135,8 @@ export default function OverviewPage() {
               </p>
             </div>
           </section>
+
+          {d.bot && <BotSection b={d.bot} />}
         </>
       )}
     </main>
@@ -159,6 +161,67 @@ function Kpi({ label, value, unit, sub, href }: { label: string; value: number; 
     </Link>
   ) : (
     <div className={cls}>{body}</div>
+  );
+}
+
+type Bot = NonNullable<OverviewData["bot"]>;
+
+/** 機器人表現（近 7 天） */
+function BotSection({ b }: { b: Bot }) {
+  const max = Math.max(1, ...b.days.map((x) => x.v));
+  const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : "—");
+  return (
+    <section aria-labelledby="bot" className="mt-6 flex flex-col gap-3.5">
+      <div className="flex flex-wrap items-baseline gap-2.5">
+        <h2 id="bot" className="text-lg font-bold">
+          機器人表現
+        </h2>
+        <span className="text-[13px] text-mute">近 7 天（含今天）</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+        <Kpi label="客人訊息" value={b.messages} unit="則" sub={`${b.talkers} 位客人 · 平均每天 ${Math.round(b.messages / 7)} 則`} />
+        <Kpi label="機器人自己回完" value={b.selfSolved ?? 0} unit="%" sub={b.selfSolved === null ? "還沒有對話" : "沒有轉給真人的客人"} />
+        <Kpi label="轉給真人" value={b.handoffs} unit="次" sub={`${b.handoffUsers} 位客人 · 佔 ${pct(b.handoffUsers, b.talkers)}`} />
+        <Kpi label="詢問 → 結單" value={b.asked ? Math.round((b.ordered / b.asked) * 100) : 0} unit="%" sub={`${b.asked} 位開始詢問，${b.ordered} 位下單`} />
+      </div>
+      <div className="grid gap-3.5 lg:grid-cols-2">
+        <div className={`${card} px-5 py-4`}>
+          <h3 className="text-[17px] font-bold">每天對話數</h3>
+          <p className="mb-3 text-[13px] text-mute">客人傳來的訊息則數</p>
+          <div className="flex h-[180px] items-end gap-2.5 border-b border-field" role="img" aria-label={`近 7 天每天對話數：${b.days.map((x) => `${x.label} ${x.v} 則`).join("、")}`}>
+            {b.days.map((x) => (
+              <div key={x.label} className="flex h-full flex-1 flex-col items-center justify-end gap-1" title={`${x.label}：${x.v} 則`}>
+                <span className="text-xs font-bold">{x.v}</span>
+                <div className="w-full max-w-11 rounded-t bg-leaf" style={{ height: `${(x.v / max) * 140}px` }} />
+              </div>
+            ))}
+          </div>
+          <div className="mt-1.5 flex gap-2.5">
+            {b.days.map((x) => (
+              <span key={x.label} className="flex-1 text-center text-xs text-mute">
+                {x.label}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className={`${card} px-5 py-4`}>
+          <h3 className="text-[17px] font-bold">轉給真人的原因</h3>
+          <p className="mb-3 text-[13px] text-mute">每一次「需要你處理」都會記錄，按「已處理」或真人回覆後也會留著</p>
+          <Bars
+            rows={[
+              { name: "機器人答不出來", v: b.reasons.unanswered, unit: "次" },
+              { name: "想找真人", v: b.reasons.human, unit: "次" },
+              { name: "確認卡 3 小時沒按", v: b.reasons.confirm, unit: "次" },
+            ]}
+            color="#C2621B"
+          />
+          <p className="mt-3 text-[13px] text-ink2">
+            {b.avgMin === null ? "還沒有處理完的紀錄" : <>平均 <b>{b.avgMin < 60 ? `${b.avgMin} 分鐘` : `${Math.round(b.avgMin / 6) / 10} 小時`}</b> 內處理</>}
+            {b.open > 0 && <> · 還有 <b className="text-[#9E2A1C]">{b.open}</b> 件沒處理</>}
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 

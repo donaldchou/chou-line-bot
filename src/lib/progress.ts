@@ -60,7 +60,9 @@ export async function setStage(
   set.cycle = cycle;
   if (stage === "fill") set.missing = opts.missing ?? "";
   if (opts.contact?.name) set.contact = opts.contact;
-  await LineUser.updateOne({ _id: userId }, { $set: set });
+  // 問過的品項（分群用）
+  const sys = opts.sys ?? cycle?.sys;
+  await LineUser.updateOne({ _id: userId }, { $set: set, ...(sys ? { $addToSet: { asked: sys } } : {}) });
 }
 
 export const STAGES: { key: Stage; name: string; hint: string }[] = [

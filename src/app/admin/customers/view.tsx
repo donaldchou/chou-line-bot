@@ -4,21 +4,23 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import type { CustomersData } from "@/lib/admin-data";
-import { ago, Avatar, btn, card, chip, ErrorBar, money, ProdBadge, STAGE_KEYS, STAGE_UI, StageBadge, usePoll } from "../_ui/ui";
+import { ago, Avatar, btn, card, chip, ErrorBar, money, ProdBadge, SegBadges, STAGE_KEYS, STAGE_UI, StageBadge, usePoll } from "../_ui/ui";
+import { SEGMENTS } from "@/lib/segments";
+import { VipCard } from "./vip";
 
 export function CustomersView() {
   const sp = useSearchParams();
   const router = useRouter();
   const path = usePathname();
   const stage = sp.get("stage") ?? "all";
-  const sys = sp.get("sys") ?? "";
+  const seg = sp.get("seg") ?? "";
   const tag = sp.get("tag") ?? "";
   const q = sp.get("q") ?? "";
   const page = Number(sp.get("page")) || 1;
   const [text, setText] = useState(q);
 
-  const qs = new URLSearchParams({ stage, sys, tag, q, page: String(page) });
-  const { data: d, error, loading } = usePoll<CustomersData>(`/api/admin/customers?${qs}`, 30_000);
+  const qs = new URLSearchParams({ stage, seg, tag, q, page: String(page) });
+  const { data: d, error, loading, reload } = usePoll<CustomersData>(`/api/admin/customers?${qs}`, 30_000);
 
   const go = (patch: Record<string, string>) => {
     const n = new URLSearchParams(sp);
@@ -65,18 +67,26 @@ export function CustomersView() {
           </button>
         ))}
       </div>
+      <section aria-labelledby="seg-h" className={`${card} mb-2.5 flex flex-col gap-2.5 px-4 py-3`}>
+        <div className="flex flex-wrap items-baseline gap-2.5">
+          <h2 id="seg-h" className="text-base font-bold">
+            分群
+          </h2>
+          <span className="text-[13px] text-mute">機器人依對話和訂單自動分，一位客人可以同時在好幾群</span>
+        </div>
+        <div role="group" aria-label="依分群篩選" className="flex flex-wrap gap-2">
+          {SEGMENTS.map((s) => (
+            <button key={s.key} type="button" className={chip(seg === s.key)} aria-pressed={seg === s.key} onClick={() => toggle("seg", s.key, seg)} title={s.rule}>
+              <span className="h-2.5 w-2.5 rounded-[3px]" style={{ background: seg === s.key && s.key === "vip" ? "#fff" : s.dot }} />
+              {s.name} {d?.segCount[s.key] ?? ""}
+            </button>
+          ))}
+        </div>
+        {seg && <p className="text-[13px] text-ink2">{SEGMENTS.find((s) => s.key === seg)?.rule}</p>}
+      </section>
       <div role="group" aria-label="其他篩選" className="mb-4 flex flex-wrap gap-2">
-        <button type="button" className={chip(sys === "kaki")} aria-pressed={sys === "kaki"} onClick={() => toggle("sys", "kaki", sys)}>
-          甜柿
-        </button>
-        <button type="button" className={chip(sys === "peach")} aria-pressed={sys === "peach"} onClick={() => toggle("sys", "peach", sys)}>
-          水蜜桃
-        </button>
         <button type="button" className={chip(tag === "alert")} aria-pressed={tag === "alert"} onClick={() => toggle("tag", "alert", tag)}>
           需要我處理
-        </button>
-        <button type="button" className={chip(tag === "repeat")} aria-pressed={tag === "repeat"} onClick={() => toggle("tag", "repeat", tag)}>
-          老客戶（下單 2 次以上）
         </button>
         <button type="button" className={chip(tag === "paused")} aria-pressed={tag === "paused"} onClick={() => toggle("tag", "paused", tag)}>
           真人接手中
@@ -87,15 +97,14 @@ export function CustomersView() {
           </button>
         )}
       </div>
-
       <ErrorBar messages={[error]} />
 
       <div className={`${card} overflow-x-auto`}>
-        <table className="w-full min-w-[1040px] border-collapse">
+        <table className="w-full min-w-[1180px] border-collapse">
           <thead>
             <tr className="bg-[#F7F8F5] text-left text-[13px] text-ink2">
-              {["客戶", "進度", "品項", "最後一則訊息", "機器人關心", "訂單／盒數", "累計金額", "最後聯絡"].map((h, i) => (
-                <th key={h} scope="col" className={`whitespace-nowrap border-b border-line px-3.5 py-3 font-bold ${i === 5 || i === 6 ? "text-right" : ""}`}>
+              {["客戶", "進度", "分群", "品項", "最後一則訊息", "機器人關心", "訂單／盒數", "累計金額", "最後聯絡"].map((h, i) => (
+                <th key={h} scope="col" className={`whitespace-nowrap border-b border-line px-3.5 py-3 font-bold ${i === 6 || i === 7 ? "text-right" : ""}`}>
                   {h}
                 </th>
               ))}
@@ -120,6 +129,9 @@ export function CustomersView() {
                     {r.paused && <span className="text-xs font-bold text-[#8A4B00]">真人接手中</span>}
                   </div>
                 </td>
+                <td className="px-3.5 py-3">
+                  {r.segs.length ? <SegBadges segs={r.segs} /> : <span className="text-mute">—</span>}
+                </td>
                 <td className="px-3.5 py-3">{r.prod ? <ProdBadge sys={r.sys} text={r.prod} /> : <span className="text-mute">—</span>}</td>
                 <td className="max-w-[300px] px-3.5 py-3 text-ink2">
                   <span className="line-clamp-2">
@@ -137,14 +149,14 @@ export function CustomersView() {
             ))}
             {d && d.rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3.5 py-8 text-center text-sm text-mute">
+                <td colSpan={9} className="px-3.5 py-8 text-center text-sm text-mute">
                   沒有符合的客戶
                 </td>
               </tr>
             )}
             {!d && (
               <tr>
-                <td colSpan={8} className="px-3.5 py-8 text-center text-sm text-mute">
+                <td colSpan={9} className="px-3.5 py-8 text-center text-sm text-mute">
                   {loading ? "載入中…" : ""}
                 </td>
               </tr>
@@ -168,6 +180,8 @@ export function CustomersView() {
           </span>
         </div>
       )}
+
+      {d && <VipCard vip={d.vip} onSaved={reload} />}
     </main>
   );
 }

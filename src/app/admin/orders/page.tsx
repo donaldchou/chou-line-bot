@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import type { OrdersData } from "@/lib/admin-data";
 import { api, Badge, btn, card, chip, ErrorBar, mdhm, money, SYS_LABEL, usePoll } from "../_ui/ui";
+import { useCanEdit } from "../_ui/me";
 
 const RANGES = [
   { k: "today", n: "今天" },
@@ -23,7 +24,9 @@ export default function OrdersPage() {
   const [range, setRange] = useState("week");
   const [filter, setFilter] = useState("all");
   const { data: d, error, loading, reload } = usePoll<OrdersData>(`/api/admin/orders?range=${range}`, 60_000);
-  const [busy, setBusy] = useState("");
+  const [busyRaw, setBusy] = useState("");
+  // 一般使用者只能看：通知、提醒按鈕停用
+  const busy = useCanEdit() ? busyRaw : "readonly";
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const rows = d?.rows.filter((r) => filter === "all" || r.state === filter) ?? [];

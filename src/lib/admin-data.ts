@@ -1,5 +1,6 @@
 import { connectDB } from "./mongodb";
-import { ChatMessage, LineUser, OrderDraft, type LineUserDoc, type OrderDraftDoc, type Stage } from "./models";
+import { AdminSetting, AlertLog, ChatMessage, LineUser, OrderDraft, type LineUserDoc, type OrderDraftDoc, type Stage } from "./models";
+import { DEFAULT_VIP, isSegKey, SEG_KEYS, segmentsFor, type SegKey, type VipRule } from "./segments";
 import { getOrder, getProducts, listLineOrders, SYS_INFO, SYSTEMS, type OrderInfo, type Sys } from "./ll3";
 import { botPaused, STAGES, viewStage } from "./progress";
 
@@ -104,9 +105,24 @@ export interface CustomerRow {
   alert: { kind: string; text: string; at: string } | null;
   paused: boolean;
   pending: { total: number; at: string; lines: string } | null;
+  /** 分群 */
+  segs: SegKey[];
 }
 
-type Agg = { _id: string; n: number; boxes: number; amount: number; lastNo?: number; lastSys?: Sys };
+type Agg = { _id: string; n: number; boxes: number; amount: number; lastNo?: number; lastSys?: Sys; bought?: string[] };
+
+/* ---------- 分群的 VIP 條件（後台可改） ---------- */
+const VIP_ID = "segments";
+export async function vipRule(): Promise<VipRule> {
+  await connectDB();
+  const d = (await AdminSetting.findById(VIP_ID).lean()) as { vipOrders?: number; vipAmount?: number } | null;
+  return { orders: d?.vipOrders ?? DEFAULT_VIP.orders, amount: d?.vipAmount ?? DEFAULT_VIP.amount };
+}
+export async function saveVipRule(v: VipRule) {
+  await connectDB();
+  await AdminSetting.updateOne({ _id: VIP_ID }, { $set: { vipOrders: v.orders, vipAmount: v.amount } }, { upsert: true });
+  return vipRule();
+}
 
 async function orderAgg(userIds?: string[]) {
   const rows = await OrderDraft.aggregate<Agg>([
@@ -120,6 +136,7 @@ async function orderAgg(userIds?: string[]) {
         amount: { $sum: "$quote.total" },
         lastNo: { $first: "$orderId" },
         lastSys: { $first: "$sys" },
+        bought: { $addToSet: "$sys" },
       },
     },
   ]);
@@ -139,8 +156,14 @@ async function pendingDrafts(now: Date, userIds?: string[]) {
   return m;
 }
 
-function toRow(u: LineUserDoc, now: Date, agg?: Agg, pend?: OrderDraftDoc): CustomerRow {
+function toRow(u: LineUserDoc, now: Date, agg?: Agg, pend?: OrderDraftDoc, vip: VipRule = DEFAULT_VIP): CustomerRow {
   const stage = viewStage(u, now);
+  // 以前的客人還沒有 asked 欄位：用這一輪／最近詢問的品項補
+  const asked = [...new Set([...(u.asked ?? []), u.cycle?.sys, u.interest?.sys].filter((x): x is string => !!x))];
+  const segs = segmentsFor(
+    { asked, bought: agg?.bought ?? [], orders: agg?.n ?? 0, amount: agg?.amount ?? 0, asking: !!u.cycle || !!u.stage },
+    vip,
+  );
   const sys = (u.cycle?.sys ?? u.interest?.sys ?? pend?.sys ?? agg?.lastSys ?? null) as Sys | null;
   let prod = label(sys);
   let extra = "";
@@ -171,6 +194,7 @@ function toRow(u: LineUserDoc, now: Date, agg?: Agg, pend?: OrderDraftDoc): Cust
     alert: u.alert ? { kind: u.alert.kind, text: u.alert.text, at: new Date(u.alert.at).toISOString() } : null,
     paused: botPaused(u, now),
     pending: pend ? { total: pend.quote.total, at: new Date(pend.createdAt).toISOString(), lines: linesText(pend) } : null,
+    segs,
   };
 }
 
@@ -192,6 +216,7 @@ export async function overview(now = new Date()) {
   const week = twWeek(now);
   const ll3 = ll3Orders(30);
   const shop = shopStatus();
+  const bot = botStats(now).catch((e) => (console.error("botStats", e), null));
 
   const users = await LineUser.find({
     blocked: false,
@@ -291,19 +316,107 @@ export async function overview(now = new Date()) {
     bars,
     funnel,
     afterFollow,
+    bot: await bot,
     errors,
   };
 }
 
+/* ---------- 機器人表現（總覽最下方，近 7 天） ---------- */
+
+export async function botStats(now = new Date()) {
+  await connectDB();
+  const start = twDay(now, -6);
+  const [perDay, talkers, logs, drafts, cycles] = await Promise.all([
+    ChatMessage.aggregate<{ _id: string; n: number }>([
+      { $match: { role: "user", at: { $gte: start } } },
+      { $group: { _id: { $dateToString: { date: "$at", format: "%Y-%m-%d", timezone: "+08:00" } }, n: { $sum: 1 } } },
+    ]),
+    ChatMessage.distinct("userId", { role: "user", at: { $gte: start } }),
+    AlertLog.find({ at: { $gte: start } }).lean(),
+    OrderDraft.find({ createdAt: { $gte: start } }, { createdAt: 1, orderedAt: 1, status: 1 }).lean<Pick<OrderDraftDoc, "createdAt" | "orderedAt" | "status">[]>(),
+    LineUser.find({ "cycle.at": { $gte: start } }, { cycle: 1 }).lean<Pick<LineUserDoc, "cycle">[]>(),
+  ]);
+
+  const byDay = new Map(perDay.map((d) => [d._id, d.n]));
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = twDay(now, i - 6);
+    const key = new Date(d.getTime() + TZ).toISOString().slice(0, 10);
+    return { label: i === 6 ? "今天" : `${Number(key.slice(5, 7))}/${Number(key.slice(8, 10))}`, v: byDay.get(key) ?? 0 };
+  });
+  const messages = days.reduce((s, d) => s + d.v, 0);
+
+  const handedUsers = new Set(logs.map((l) => l.userId));
+  // 確認卡送出超過 3 小時才按（或到現在都沒按）
+  const slowConfirm = drafts.filter((d) => {
+    const end = d.orderedAt ? new Date(d.orderedAt).getTime() : d.status === "pending" ? now.getTime() : null;
+    return end !== null && end - new Date(d.createdAt).getTime() >= CONFIRM_ALERT_H * H;
+  }).length;
+  const resolved = logs.filter((l) => l.resolvedAt);
+  const avgMin = resolved.length
+    ? Math.round(resolved.reduce((s, l) => s + (new Date(l.resolvedAt!).getTime() - new Date(l.at).getTime()), 0) / resolved.length / 60_000)
+    : null;
+  const c = cycles.map((u) => u.cycle!).filter(Boolean);
+
+  return {
+    days,
+    messages,
+    talkers: talkers.length,
+    selfSolved: talkers.length ? Math.round(((talkers.length - [...handedUsers].filter((u) => talkers.includes(u)).length) / talkers.length) * 100) : null,
+    handoffs: logs.length,
+    handoffUsers: handedUsers.size,
+    reasons: {
+      unanswered: logs.filter((l) => l.kind === "unanswered").length,
+      human: logs.filter((l) => l.kind === "human").length,
+      confirm: slowConfirm,
+    },
+    open: logs.length - resolved.length,
+    avgMin,
+    asked: c.length,
+    ordered: c.filter((x) => x.ordered).length,
+  };
+}
+
+/* ---------- 群發對象 ---------- */
+
+/** 7 天內收過群發的客人不再傳 */
+export const BROADCAST_GAP_DAYS = 7;
+
+/** 選的分群（"all"＝全部好友）裡的客人：去掉重複、已封鎖、7 天內收過群發的 */
+export async function segmentMembers(segs: string[], now = new Date()) {
+  await connectDB();
+  const users = await LineUser.find({ blocked: false }).lean<LineUserDoc[]>();
+  const [agg, pend, vip] = await Promise.all([orderAgg(), pendingDrafts(now), vipRule()]);
+  const all = segs.includes("all");
+  const picked = users.filter((u) => all || toRow(u, now, agg.get(u._id), pend.get(u._id), vip).segs.some((s) => segs.includes(s)));
+  const gap = now.getTime() - BROADCAST_GAP_DAYS * DAY;
+  const recent = picked.filter((u) => u.lastBroadcastAt && new Date(u.lastBroadcastAt).getTime() >= gap);
+  const recentIds = new Set(recent.map((u) => u._id));
+  return { ids: picked.filter((u) => !recentIds.has(u._id)).map((u) => u._id), total: picked.length, excluded: recent.length };
+}
+
+/** 各分群人數（群發頁用） */
+export async function segmentSizes(now = new Date()) {
+  await connectDB();
+  const users = await LineUser.find({ blocked: false }).lean<LineUserDoc[]>();
+  const [agg, pend, vip] = await Promise.all([orderAgg(), pendingDrafts(now), vipRule()]);
+  const rows = users.map((u) => toRow(u, now, agg.get(u._id), pend.get(u._id), vip));
+  return { all: rows.length, ...Object.fromEntries(SEG_KEYS.map((k) => [k, rows.filter((r) => r.segs.includes(k)).length])) } as Record<SegKey | "all", number>;
+}
+
 /* ---------- 客戶列表 ---------- */
 
-export async function customers(q: { stage?: string; sys?: string; tag?: string; search?: string; page?: number }, now = new Date()) {
+export async function customers(
+  q: { stage?: string; sys?: string; tag?: string; seg?: string; search?: string; page?: number },
+  now = new Date(),
+) {
   await connectDB();
   const users = await LineUser.find({ blocked: false }).sort({ lastAt: -1 }).limit(3000).lean<LineUserDoc[]>();
-  const [agg, pend] = await Promise.all([orderAgg(), pendingDrafts(now)]);
-  let rows = users.map((u) => toRow(u, now, agg.get(u._id), pend.get(u._id)));
+  const [agg, pend, vip] = await Promise.all([orderAgg(), pendingDrafts(now), vipRule()]);
+  let rows = users.map((u) => toRow(u, now, agg.get(u._id), pend.get(u._id), vip));
   const stageCount: Record<string, number> = { all: rows.length };
   for (const r of rows) stageCount[r.stage] = (stageCount[r.stage] ?? 0) + 1;
+  const segCount = Object.fromEntries(SEG_KEYS.map((k) => [k, rows.filter((r) => r.segs.includes(k)).length])) as Record<SegKey, number>;
+  if (isSegKey(q.seg)) rows = rows.filter((r) => r.segs.includes(q.seg as SegKey));
 
   const s = (q.search ?? "").trim();
   if (s) {
@@ -324,7 +437,7 @@ export async function customers(q: { stage?: string; sys?: string; tag?: string;
 
   const per = 30;
   const page = Math.max(1, q.page ?? 1);
-  return { total: rows.length, page, per, stageCount, rows: rows.slice((page - 1) * per, page * per) };
+  return { total: rows.length, page, per, stageCount, segCount, vip, rows: rows.slice((page - 1) * per, page * per) };
 }
 
 /* ---------- 單一客戶 ---------- */
@@ -333,7 +446,7 @@ export async function customerDetail(id: string, now = new Date()) {
   await connectDB();
   const u = await LineUser.findById(id).lean<LineUserDoc>();
   if (!u) return null;
-  const [agg, pend, msgs, drafts] = await Promise.all([
+  const [agg, pend, msgs, drafts, vip] = await Promise.all([
     orderAgg([id]),
     pendingDrafts(now, [id]),
     ChatMessage.find({ userId: id }).sort({ at: -1 }).limit(300).lean(),
@@ -341,8 +454,9 @@ export async function customerDetail(id: string, now = new Date()) {
       .sort({ createdAt: -1 })
       .limit(20)
       .lean<OrderDraftDoc[]>(),
+    vipRule(),
   ]);
-  const row = toRow(u, now, agg.get(id), pend.get(id));
+  const row = toRow(u, now, agg.get(id), pend.get(id), vip);
   const p = pend.get(id);
 
   // 成立的訂單：向 ll3 查目前狀態（最近 5 筆）

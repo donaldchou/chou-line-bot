@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { connectDB } from "./mongodb";
-import { ChatMessage, LineUser, OrderDraft, WebhookEvent, type LineUserDoc, type OrderInput } from "./models";
+import { AlertLog, ChatMessage, LineUser, OrderDraft, WebhookEvent, type LineUserDoc, type OrderInput } from "./models";
 import { botPaused, logMessage, setStage } from "./progress";
 import { getProfile, imageMsg, send, showLoading, textMsg, withQuickReply, type LineMessage, type QuickItem } from "./line";
 import { chat, type Content, type FunctionDecl, type ToolHandler } from "./gemini";
@@ -20,6 +20,7 @@ import {
 } from "./ll3";
 import { confirmCard, deliveryText, orderCarousel, payText, productCarousel, successCard } from "./flex";
 import { imgSig } from "./sign";
+import { CAP_LABEL, capReplies, checkCapacity, productCaps } from "./capacity";
 
 const HISTORY = 15;
 const DRAFT_DAYS = 3;
@@ -227,7 +228,26 @@ function handlers(t: Turn): Record<string, ToolHandler> {
       const sys = asSys(a.product);
       const r = await getProducts(sys);
       await markInterest(t.user, sys);
-      return { product: SYS_INFO[sys].label, open: r.open, closedMessage: r.open ? undefined : r.closedMsg, products: r.products.map((p) => ({ id: p.id, name: p.name, price: p.price })) };
+      // 農場在後台「接單設定」可以把個別規格設成本週額滿或停止接單
+      const [caps, replies] = await Promise.all([productCaps(sys, r.products), capReplies()]);
+      const capOf = new Map(caps.map((c) => [c.id, c]));
+      return {
+        product: SYS_INFO[sys].label,
+        open: r.open,
+        closedMessage: r.open ? undefined : r.closedMsg,
+        products: r.products.map((p) => {
+          const c = capOf.get(p.id);
+          const st = c?.effective ?? "open";
+          return {
+            id: p.id,
+            name: p.name,
+            price: p.price,
+            orderStatus: CAP_LABEL[st],
+            ...(st !== "open" ? { reply: replies[st] } : c?.left != null ? { leftThisWeek: c.left } : {}),
+          };
+        }),
+        note: "orderStatus 不是「接單中」的規格不能下單，照 reply 的意思回覆客人，並推薦其他接單中的規格",
+      };
     },
 
     async send_product_photos(a) {
@@ -281,6 +301,8 @@ function handlers(t: Turn): Record<string, ToolHandler> {
 
       const p = await getProducts(sys);
       if (!p.open) return { error: `${SYS_INFO[sys].label}目前沒有開放訂購`, closedMessage: p.closedMsg };
+      const cap = await checkCapacity(sys, items);
+      if (!cap.ok) return { error: `${cap.product}${CAP_LABEL[cap.status]}，不能下單`, reply: cap.reply };
       let q;
       try {
         q = await quote(sys, items, data.pay);
@@ -342,7 +364,10 @@ function handlers(t: Turn): Record<string, ToolHandler> {
       }
       if (a.status === "unanswered" || a.status === "human") {
         const text = str(a.reason) || (a.status === "human" ? "客人想找真人" : "機器人答不出來");
-        await LineUser.updateOne({ _id: t.user._id }, { $set: { alert: { kind: a.status, text: text.slice(0, 200), at: new Date() } } });
+        const at = new Date();
+        await LineUser.updateOne({ _id: t.user._id }, { $set: { alert: { kind: a.status, text: text.slice(0, 200), at } } });
+        // 留紀錄：總覽的「機器人表現」用
+        await AlertLog.create({ userId: t.user._id, kind: a.status, text: text.slice(0, 200), at });
         t.notes.push(`[已通知農場主人：${text}]`);
         return { ok: true, note: "已通知農場主人，請告訴客人農場會再跟他聯絡，急的話可以直接打電話" };
       }
@@ -400,6 +425,9 @@ async function handlePostback(user: LineUserDoc, data: string, replyToken: strin
 
   if (kind === "order" && isSys(a) && b) {
     const p = (await getProducts(a)).products.find((x) => x.id === b);
+    // 產品卡片上的「訂這個」：額滿／停止接單就直接告訴客人
+    const cap = await checkCapacity(a, [{ id: b, qty: 1 }]).catch(() => ({ ok: true as const }));
+    if (!cap.ok) return handleText(user, `我要訂${p?.name ?? b}（${SYS_INFO[a].label}，貨號 ${b}；系統：這個規格${CAP_LABEL[cap.status]}）`, replyToken);
     await setStage(userId, "fill", { sys: a, missing: "訂購者、收件者資料" });
     return handleText(user, `我要訂${p?.name ?? b}（${SYS_INFO[a].label}，貨號 ${b}）`, replyToken);
   }
@@ -442,6 +470,16 @@ async function confirmOrder(user: LineUserDoc, ref: string, replyToken: string) 
         : old?.status === "creating"
           ? "訂單正在建立中，請稍候…"
           : "這張確認卡已經失效（可能已修改過或超過 3 天），請再告訴我一次要訂的內容，我重新整理給您確認。";
+    await send(userId, replyToken, [textMsg(msg)]);
+    await saveMsg(userId, "model", msg);
+    return;
+  }
+
+  // 送出確認卡之後才額滿／停止接單：這張不能成立
+  const cap = await checkCapacity(draft.sys, draft.data.items).catch(() => ({ ok: true as const }));
+  if (!cap.ok) {
+    await OrderDraft.updateOne({ _id: ref }, { $set: { status: "cancelled", error: `capacity: ${cap.product} ${cap.status}` } });
+    const msg = `${cap.reply}\n（這張確認卡沒有成立，要改訂其他規格的話直接告訴我就可以）`;
     await send(userId, replyToken, [textMsg(msg)]);
     await saveMsg(userId, "model", msg);
     return;

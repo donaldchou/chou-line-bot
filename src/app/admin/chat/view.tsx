@@ -17,18 +17,20 @@ import {
   mdhm,
   money,
   sameDay,
+  SegBadges,
   STAGE_UI,
   StageBadge,
   SYS_LABEL,
   usePoll,
   type Stage,
 } from "../_ui/ui";
+import { useCanEdit } from "../_ui/me";
 
 export function ChatView() {
   const sp = useSearchParams();
   const uid = sp.get("u");
   return (
-    <main className="flex min-h-0 flex-1 flex-col md:h-dvh md:flex-row">
+    <main className="flex min-h-0 flex-1 flex-col lg:h-dvh lg:flex-row">
       <div className={`${uid ? "hidden lg:flex" : "flex"} min-h-0 w-full flex-col border-r border-line bg-white lg:w-[300px] lg:flex-none`}>
         <Threads current={uid} />
       </div>
@@ -114,6 +116,9 @@ function Detail({ id }: { id: string }) {
   const [tab, setTab] = useState<"chat" | "info">("chat");
   const [busy, setBusy] = useState("");
   const [actErr, setActErr] = useState("");
+  // 一般使用者只能看：回覆、暫停機器人、備註等按鈕都停用
+  const canEdit = useCanEdit();
+  const lockBusy = canEdit ? busy : "readonly";
 
   const act = async (action: string, extra: Record<string, unknown> = {}, confirmMsg?: string) => {
     if (confirmMsg && !confirm(confirmMsg)) return false;
@@ -162,9 +167,11 @@ function Detail({ id }: { id: string }) {
                 <span className="h-2 w-2 rounded-full bg-[#D08A1E]" />
                 真人接手中（{clock(d.pausedUntil)} 自動恢復）
               </span>
-              <button type="button" className={btn()} disabled={!!busy} onClick={() => act("pause", { on: false })}>
-                恢復機器人
-              </button>
+              {canEdit && (
+                <button type="button" className={btn()} disabled={!!busy} onClick={() => act("pause", { on: false })}>
+                  恢復機器人
+                </button>
+              )}
             </>
           ) : (
             <>
@@ -172,9 +179,11 @@ function Detail({ id }: { id: string }) {
                 <span className="h-2 w-2 rounded-full bg-[#17A05B]" />
                 機器人回覆中
               </span>
-              <button type="button" className={btn()} disabled={!!busy} onClick={() => act("pause", { on: true })}>
-                我來回覆（暫停機器人）
-              </button>
+              {canEdit && (
+                <button type="button" className={btn()} disabled={!!busy} onClick={() => act("pause", { on: true })}>
+                  我來回覆（暫停機器人）
+                </button>
+              )}
             </>
           )}
           <button type="button" className={`${btn()} xl:hidden`} onClick={() => setTab("info")}>
@@ -183,7 +192,11 @@ function Detail({ id }: { id: string }) {
         </header>
         <MobileProgress d={d} onInfo={() => setTab("info")} />
         <Messages d={d} />
-        <Composer busy={busy} error={actErr} blocked={false} onSend={(text) => act("reply", { text })} onProducts={(sys) => act("products", { sys })} />
+        {canEdit ? (
+          <Composer busy={busy} error={actErr} blocked={false} onSend={(text) => act("reply", { text })} onProducts={(sys) => act("products", { sys })} />
+        ) : (
+          <p className="border-t border-line bg-white px-4 py-3 text-sm text-mute md:px-5">一般使用者只能檢視對話，回覆客人請由管理者處理。</p>
+        )}
       </section>
 
       <aside
@@ -194,7 +207,7 @@ function Detail({ id }: { id: string }) {
           ‹ 回到聊天
         </button>
         {actErr && tab === "info" && <ErrorBar messages={[actErr]} />}
-        <Info d={d} busy={busy} act={act} />
+        <Info d={d} busy={lockBusy} act={act} />
       </aside>
     </div>
   );
@@ -416,6 +429,13 @@ function Info({ d, busy, act }: { d: CustomerDetail; busy: string; act: (a: stri
             已處理
           </button>
         </div>
+      )}
+
+      {r.segs.length > 0 && (
+        <section>
+          <h3 className="mb-2 text-sm font-bold text-ink2">分群</h3>
+          <SegBadges segs={r.segs} small={false} />
+        </section>
       )}
 
       <section>
