@@ -1,13 +1,8 @@
 /* Gemini 對話＋函式呼叫（REST v1beta） */
 
-// 3.6-flash 偶爾 503 high demand 或一直沒回應，失敗時改用 3.5-flash-lite
-const PRIMARY = process.env.GEMINI_MODEL || "gemini-3.6-flash";
-const FALLBACK = "gemini-3.5-flash-lite";
-export const GEMINI_MODELS = [PRIMARY, FALLBACK];
-export const geminiEnabled = () => !!process.env.GEMINI_API_KEY;
-/** 主力模型失敗後，這段時間內直接用備用模型（不再每次等它逾時） */
-const PRIMARY_COOLDOWN = 5 * 60_000;
-let primaryDownUntil = 0;
+/** 失敗（逾時、503、429）的模型，這段時間內先跳過（還有別的模型可用時） */
+const COOLDOWN = 5 * 60_000;
+const downUntil = new Map<string, number>();
 /** 一整輪對話（含呼叫函式）最多花的時間：LINE webhook 函式上限 60 秒，要留時間回覆客人 */
 const CHAT_BUDGET = 45_000;
 
@@ -24,21 +19,24 @@ export interface FunctionDecl {
 }
 export type ToolHandler = (args: Record<string, unknown>) => Promise<object>;
 
-async function generate(system: string, contents: Content[], tools: FunctionDecl[], deadline: number, afterTools: boolean, used: { model?: string }) {
+export const geminiEnabled = () => !!process.env.GEMINI_API_KEY;
+
+async function generate(system: string, contents: Content[], tools: FunctionDecl[], deadline: number, afterTools: boolean, all: string[], used: { model?: string }) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("請設定 GEMINI_API_KEY");
   let lastError = "";
-  const models = Date.now() < primaryDownUntil ? [FALLBACK] : [PRIMARY, FALLBACK];
-  for (const model of models) {
+  const up = all.filter((m) => Date.now() >= (downUntil.get(m) ?? 0));
+  const models = up.length ? up : all;
+  for (const [i, model] of models.entries()) {
     const left = deadline - Date.now();
     if (left < 3_000) {
       lastError ||= "時間不夠";
       break;
     }
-    // 主力模型最多等 15 秒，留時間給備用模型
-    const timeout = Math.min(left, model === PRIMARY && models.length > 1 ? 15_000 : 25_000);
+    // 後面還有模型可以換時最多等 15 秒
+    const timeout = Math.min(left, i < models.length - 1 ? 15_000 : 25_000);
     const markDown = () => {
-      if (model === PRIMARY) primaryDownUntil = Date.now() + PRIMARY_COOLDOWN;
+      if (models.length > 1) downUntil.set(model, Date.now() + COOLDOWN);
     };
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
@@ -47,7 +45,7 @@ async function generate(system: string, contents: Content[], tools: FunctionDecl
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: system }] },
           contents,
-          tools: [{ functionDeclarations: tools }],
+          ...(tools.length ? { tools: [{ functionDeclarations: tools }] } : {}),
           generationConfig: { temperature: 0.4 },
         }),
         signal: AbortSignal.timeout(timeout),
@@ -76,20 +74,22 @@ async function generate(system: string, contents: Content[], tools: FunctionDecl
   throw new Error(`Gemini 失敗：${lastError}`);
 }
 
-/** 跑一輪對話：模型要呼叫函式就執行後把結果交回，最多 5 回合；回傳最後的文字 */
+/**
+ * 跑一輪對話：模型要呼叫函式就執行後把結果交回，最多 5 回合；回傳最後的文字。
+ * models：依序嘗試的 Gemini 模型；used.model 回傳實際回答的模型。
+ */
 export async function chat(
   system: string,
   contents: Content[],
   tools: FunctionDecl[],
   handlers: Record<string, ToolHandler>,
-  budget = CHAT_BUDGET,
-  /** 回傳實際回答的模型（主力或備用） */
-  used: { model?: string } = {},
+  opts: { models: string[]; budget?: number; used?: { model?: string } },
 ) {
+  const used = opts.used ?? {};
   const convo = [...contents];
-  const deadline = Date.now() + Math.min(budget, CHAT_BUDGET);
+  const deadline = Date.now() + Math.min(opts.budget ?? CHAT_BUDGET, CHAT_BUDGET);
   for (let round = 0; round < 5; round++) {
-    const out = await generate(system, convo, tools, deadline, round > 0, used);
+    const out = await generate(system, convo, tools, deadline, round > 0, opts.models, used);
     if (!out.parts.length) return "";
     convo.push(out);
     const calls = out.parts.filter((p) => p.functionCall);
@@ -115,4 +115,20 @@ export async function chat(
     convo.push({ role: "user", parts: responses });
   }
   return "";
+}
+
+/** 換版本前測試這個模型能不能用 */
+export async function geminiPing(model: string) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("沒有設定 GEMINI_API_KEY");
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": key },
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "回覆 OK" }] }] }),
+    signal: AbortSignal.timeout(25_000),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
+  }
 }

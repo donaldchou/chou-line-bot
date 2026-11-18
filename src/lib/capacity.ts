@@ -1,6 +1,7 @@
 import { connectDB } from "./mongodb";
 import { AdminSetting, OrderDraft, ProductSetting } from "./models";
 import { getProducts, SYS_INFO, SYSTEMS, type Product, type Sys } from "./ll3";
+import { guardSettings } from "./guard";
 
 /* 接單設定：每個品項 接單中／本週額滿／停止接單，加上每週上限盒數（只算 LINE 訂單） */
 
@@ -100,7 +101,7 @@ export async function checkCapacity(sys: Sys, items: { id: string; qty: number }
 
 /** 後台「接單設定」頁的資料 */
 export async function capacityPage(now = new Date()) {
-  const replies = await capReplies();
+  const [replies, guard] = await Promise.all([capReplies(), guardSettings()]);
   const systems = await Promise.all(
     SYSTEMS.map(async (sys) => {
       try {
@@ -111,7 +112,7 @@ export async function capacityPage(now = new Date()) {
       }
     }),
   );
-  return { weekStart: weekStart(now).toISOString(), replies, systems };
+  return { weekStart: weekStart(now).toISOString(), replies, guard, systems };
 }
 
 export async function saveProductSetting(sys: Sys, productId: string, patch: { status?: CapStatus; cap?: number | null }, by: string) {

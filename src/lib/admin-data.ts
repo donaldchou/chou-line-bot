@@ -198,6 +198,18 @@ function toRow(u: LineUserDoc, now: Date, agg?: Agg, pend?: OrderDraftDoc, vip: 
   };
 }
 
+/* ---------- 左側選單的數字 ---------- */
+
+/** human：要找真人的客戶數；ordersToday：今天 LINE 成立的訂單數 */
+export async function navCounts(now = new Date()) {
+  await connectDB();
+  const [human, ordersToday] = await Promise.all([
+    LineUser.countDocuments({ blocked: false, "alert.kind": "human" }),
+    OrderDraft.countDocuments({ status: "created", orderedAt: { $gte: twDay(now) } }),
+  ]);
+  return { human, ordersToday };
+}
+
 /* ---------- 總覽 ---------- */
 
 export interface AlertItem {
@@ -450,7 +462,7 @@ export async function customerDetail(id: string, now = new Date()) {
     orderAgg([id]),
     pendingDrafts(now, [id]),
     ChatMessage.find({ userId: id }).sort({ at: -1 }).limit(300).lean(),
-    OrderDraft.find({ userId: id, status: { $in: ["created", "pending"] } })
+    OrderDraft.find({ userId: id, status: { $in: ["created", "pending", "review"] } })
       .sort({ createdAt: -1 })
       .limit(20)
       .lean<OrderDraftDoc[]>(),
@@ -458,6 +470,7 @@ export async function customerDetail(id: string, now = new Date()) {
   ]);
   const row = toRow(u, now, agg.get(id), pend.get(id), vip);
   const p = pend.get(id);
+  const rv = drafts.find((d) => d.status === "review");
 
   // 成立的訂單：向 ll3 查目前狀態（最近 5 筆）
   const created = drafts.filter((d) => d.status === "created" && d.orderId);
@@ -476,6 +489,11 @@ export async function customerDetail(id: string, now = new Date()) {
   return {
     row,
     memo: u.memo ?? "",
+    orderBlocked: !!u.orderBlocked,
+    /** ② 大量訂單，等你核准 */
+    review: rv
+      ? { sys: rv.sys, lines: linesText(rv), total: rv.quote.total, at: new Date(rv.createdAt).toISOString(), reason: rv.review?.reason ?? "", data: rv.data }
+      : null,
     createdAt: new Date(u.createdAt).toISOString(),
     pausedUntil: u.botPausedUntil ? new Date(u.botPausedUntil).toISOString() : null,
     cycle: u.cycle

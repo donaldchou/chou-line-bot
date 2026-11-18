@@ -189,6 +189,34 @@ export function useCodeGate() {
   return { ask: setAsk, dialog };
 }
 
+/**
+ * 需要驗證碼的動作（取代原本的 confirm 對話框）：run(...) 跳出確認＋驗證碼，
+ * action 收到驗證碼後呼叫 API；失敗時錯誤顯示在對話框裡。回傳是否完成。
+ */
+export function useGatedAction() {
+  const gate = useCodeGate();
+  const run = (o: { title: string; message: ReactNode; confirmLabel?: string; danger?: boolean; action: (code: string) => Promise<unknown> }) =>
+    new Promise<boolean>((resolve) =>
+      gate.ask({
+        title: o.title,
+        confirmLabel: o.confirmLabel ?? "確認",
+        danger: o.danger,
+        message: o.message,
+        submit: async (code) => {
+          try {
+            await o.action(code);
+            resolve(true);
+            return { ok: true };
+          } catch (e) {
+            return { ok: false, error: errMsg(e) };
+          }
+        },
+        onCancel: () => resolve(false),
+      }),
+    );
+  return { run, dialog: gate.dialog };
+}
+
 function CodeModal({ ask, onClose, onDone }: { ask: CodeAsk; onClose: () => void; onDone: () => void }) {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");

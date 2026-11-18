@@ -278,7 +278,7 @@ export default function QaPage() {
                             act(
                               `d-${i.id}`,
                               { action: "delete", id: i.id },
-                              { title: "刪除問答", confirmLabel: "刪除", danger: true, message: `確定刪除「${i.q}」？刪除後機器人就不會再用這段回答，附的照片也會一起刪掉。` },
+                              { title: "刪除問答", confirmLabel: "刪除", danger: true, message: `確定刪除「${i.q}」？刪除後機器人就不會再用這段回答。刪錯了可以到「後台管理 → 已刪除紀錄」還原（照片也會保留）。` },
                             )
                           }
                         >

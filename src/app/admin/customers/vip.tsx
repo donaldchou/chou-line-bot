@@ -47,7 +47,7 @@ export function VipCard({ vip, onSaved }: { vip: VipRule; onSaved: () => void })
           value={cur.orders}
           disabled={!canEdit}
           onChange={(e) => setDraft({ ...cur, orders: e.target.value })}
-          className={`${inputCls} w-20`}
+          className={`${inputCls} w-20!`}
         />
         筆以上
       </label>
@@ -61,7 +61,7 @@ export function VipCard({ vip, onSaved }: { vip: VipRule; onSaved: () => void })
           value={cur.amount}
           disabled={!canEdit}
           onChange={(e) => setDraft({ ...cur, amount: e.target.value })}
-          className={`${inputCls} w-28`}
+          className={`${inputCls} w-28!`}
         />
         以上
       </label>

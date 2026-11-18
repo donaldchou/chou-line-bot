@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { OrdersData } from "@/lib/admin-data";
-import { api, Badge, btn, card, chip, ErrorBar, mdhm, money, SYS_LABEL, usePoll } from "../_ui/ui";
+import { Badge, btn, card, chip, ErrorBar, mdhm, money, SYS_LABEL, usePoll } from "../_ui/ui";
+import { call, UnlockTimer, useGatedAction } from "../_ui/kit";
 import { useCanEdit } from "../_ui/me";
 
 const RANGES = [
@@ -31,40 +32,51 @@ export default function OrdersPage() {
 
   const rows = d?.rows.filter((r) => filter === "all" || r.state === filter) ?? [];
 
-  const notify = async (sys: string, orderId: number) => {
-    if (!confirm(`傳 LINE 寄出通知（含託運單照片）給 ${SYS_LABEL[sys]} 訂單流水號 ${orderId} 的客人？`)) return;
-    setBusy(`${sys}-${orderId}`);
-    setMsg(null);
-    try {
-      const r = await api<{ waybills: number; images: number }>("/api/admin/orders", { json: { sys, orderId } });
-      setMsg({ ok: true, text: `已通知訂單流水號 ${orderId}：託運單 ${r.waybills} 張、照片 ${r.images} 張` });
-      await reload();
-    } catch (e) {
-      setMsg({ ok: false, text: `訂單流水號 ${orderId} 通知失敗：${e instanceof Error ? e.message : e}` });
-    } finally {
-      setBusy("");
-    }
-  };
-  const remind = async (userId: string) => {
-    if (!confirm("重新傳確認卡給客人，提醒他按「確認下單」？（會用掉 LINE 訊息則數）")) return;
-    setBusy(userId);
-    setMsg(null);
-    try {
-      await api(`/api/admin/customers/${userId}`, { json: { action: "remind" } });
-      setMsg({ ok: true, text: "已重新傳確認卡" });
-    } catch (e) {
-      setMsg({ ok: false, text: `提醒失敗：${e instanceof Error ? e.message : e}` });
-    } finally {
-      setBusy("");
-    }
-  };
+  const gated = useGatedAction();
+
+  const notify = (sys: string, orderId: number) =>
+    gated.run({
+      title: "傳寄出通知",
+      confirmLabel: "傳送",
+      message: `傳 LINE 寄出通知（含託運單照片）給 ${SYS_LABEL[sys]} 訂單流水號 ${orderId} 的客人？`,
+      action: async (code) => {
+        setBusy(`${sys}-${orderId}`);
+        setMsg(null);
+        try {
+          const r = await call<{ waybills: number; images: number }>("/api/admin/orders", { method: "POST", json: { sys, orderId }, code });
+          setMsg({ ok: true, text: `已通知訂單流水號 ${orderId}：託運單 ${r.waybills} 張、照片 ${r.images} 張` });
+          await reload();
+        } finally {
+          setBusy("");
+        }
+      },
+    });
+  const remind = (userId: string) =>
+    gated.run({
+      title: "提醒客人確認",
+      confirmLabel: "傳送",
+      message: "重新傳確認卡給客人，提醒他按「確認下單」？（會用掉 LINE 訊息則數）",
+      action: async (code) => {
+        setBusy(userId);
+        setMsg(null);
+        try {
+          await call(`/api/admin/customers/${userId}`, { method: "POST", json: { action: "remind" }, code });
+          setMsg({ ok: true, text: "已重新傳確認卡" });
+        } finally {
+          setBusy("");
+        }
+      },
+    });
 
   const s = d?.stats;
   return (
     <main className="px-4 pb-10 pt-5 md:px-8 md:pt-7">
       <header className="mb-5 flex flex-wrap items-center gap-4">
         <div className="mr-auto flex flex-col gap-0.5">
-          <h1 className="text-[26px] font-bold">LINE 訂單</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-[26px] font-bold">LINE 訂單</h1>
+            <UnlockTimer />
+          </div>
           <span className="text-sm text-mute">客人在 LINE 按「確認下單」建立的訂單，狀態即時讀取 ll3 訂單系統</span>
         </div>
         <div role="group" aria-label="期間" className="flex flex-wrap gap-1.5">
@@ -187,6 +199,7 @@ export default function OrdersPage() {
           </tbody>
         </table>
       </div>
+      {gated.dialog}
     </main>
   );
 }

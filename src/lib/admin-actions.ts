@@ -76,6 +76,35 @@ export async function customerAction(id: string, body: Record<string, unknown>, 
       await logMessage(id, "model", `${text}\n[農場重新傳了確認卡]`, "admin");
       return { ok: true };
     }
+    case "approve": {
+      // ② 大量訂單：農場主人核准後才傳確認卡（確認卡 3 天有效，從核准時算）
+      if (u.blocked) throw new ActionError("客人已封鎖官方帳號，傳不出去");
+      const now = new Date();
+      const d = await OrderDraft.findOneAndUpdate(
+        { userId: id, status: "review" },
+        { $set: { status: "pending", createdAt: now, "review.approvedAt": now, "review.approvedBy": by ?? "" } },
+        { sort: { createdAt: -1 }, returnDocument: "after" },
+      ).lean<OrderDraftDoc>();
+      if (!d) throw new ActionError("這位客人沒有等待核准的訂單");
+      const text = `您好，您的${SYS_INFO[d.sys].label}訂單農場已經確認過了，確認卡在下面，核對沒問題按「確認下單」就完成了；要修改也可以直接告訴我們。`;
+      await push(id, [textMsg(text), confirmCard(d)]);
+      await logMessage(id, "model", `${text}\n[農場核准大量訂單，傳了確認卡]`, "admin");
+      await LineUser.updateOne({ _id: id }, { $set: { alert: null } });
+      await closeAlerts(id, "resolve", by);
+      return { ok: true };
+    }
+    case "reject": {
+      const r = await OrderDraft.updateMany({ userId: id, status: "review" }, { $set: { status: "cancelled", error: `rejected by ${by ?? ""}` } });
+      if (!r.modifiedCount) throw new ActionError("這位客人沒有等待核准的訂單");
+      return { ok: true };
+    }
+    case "orderBlock": {
+      // ③ 禁止下單：還是可以問問題；設定時順便作廢還沒確認的訂單
+      const on = body.on === true;
+      await LineUser.updateOne({ _id: id }, { $set: { orderBlocked: on } });
+      if (on) await OrderDraft.updateMany({ userId: id, status: { $in: ["pending", "review"] } }, { $set: { status: "cancelled", error: "orderBlocked" } });
+      return { ok: true };
+    }
     default:
       throw new ActionError("不支援的動作");
   }

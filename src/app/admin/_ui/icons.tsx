@@ -123,6 +123,12 @@ const P: Record<string, React.ReactNode> = {
       <path d="M21 3v5h-5" />
     </>
   ),
+  undo: (
+    <>
+      <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
+      <path d="M3 3v5h5" />
+    </>
+  ),
 };
 
 export type IconName = keyof typeof P;

@@ -57,7 +57,7 @@ export async function POST(req: Request) {
         return Response.json({ ok: true });
       case "delete":
         if (!isQaId(body.id)) throw new HttpError(400, "id 不對");
-        await deleteItem(body.id);
+        await deleteItem(body.id, admin.email);
         return Response.json({ ok: true });
       case "cats":
         await saveCategories(body.cats);

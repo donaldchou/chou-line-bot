@@ -7,7 +7,6 @@ import type { CustomerDetail, CustomersData } from "@/lib/admin-data";
 import {
   ago,
   ALERT_UI,
-  api,
   Avatar,
   Badge,
   btn,
@@ -25,6 +24,7 @@ import {
   type Stage,
 } from "../_ui/ui";
 import { useCanEdit } from "../_ui/me";
+import { call, UnlockTimer, useGatedAction } from "../_ui/kit";
 
 export function ChatView() {
   const sp = useSearchParams();
@@ -53,6 +53,7 @@ function Threads({ current }: { current: string | null }) {
     <section aria-label="對話列表" className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-col gap-2.5 px-4 pb-3 pt-4">
         <h1 className="text-xl font-bold">對話</h1>
+        <UnlockTimer />
         <form
           role="search"
           onSubmit={(e) => {
@@ -120,20 +121,26 @@ function Detail({ id }: { id: string }) {
   const canEdit = useCanEdit();
   const lockBusy = canEdit ? busy : "readonly";
 
-  const act = async (action: string, extra: Record<string, unknown> = {}, confirmMsg?: string) => {
-    if (confirmMsg && !confirm(confirmMsg)) return false;
-    setBusy(action);
+  const gated = useGatedAction();
+
+  // 每個動作都要驗證碼（後台解鎖期間不用再輸入）；confirmMsg 顯示在驗證碼對話框裡
+  const act = (action: string, extra: Record<string, unknown> = {}, confirmMsg?: string) => {
+    const title = ACT_TITLE[action] ?? "操作";
     setActErr("");
-    try {
-      await api(`/api/admin/customers/${id}`, { json: { action, ...extra } });
-      await reload();
-      return true;
-    } catch (e) {
-      setActErr(e instanceof Error ? e.message : String(e));
-      return false;
-    } finally {
-      setBusy("");
-    }
+    return gated.run({
+      title,
+      confirmLabel: "確認",
+      message: confirmMsg ?? `${title}需要驗證碼。`,
+      action: async (code) => {
+        setBusy(action);
+        try {
+          await call(`/api/admin/customers/${id}`, { method: "POST", json: { action, ...extra }, code });
+          await reload();
+        } finally {
+          setBusy("");
+        }
+      },
+    });
   };
 
   if (!d)
@@ -212,9 +219,24 @@ function Detail({ id }: { id: string }) {
         {actErr && tab === "info" && <ErrorBar messages={[actErr]} />}
         <Info d={d} busy={lockBusy} act={act} />
       </aside>
+      {gated.dialog}
     </div>
   );
 }
+
+const ACT_TITLE: Record<string, string> = {
+  reply: "回覆客人",
+  products: "傳產品卡片",
+  pause: "切換機器人",
+  stopFollow: "停止關心",
+  markLost: "標記沒有下單",
+  memo: "儲存備註",
+  resolve: "標記已處理",
+  remind: "提醒客人確認",
+  approve: "核准大量訂單",
+  reject: "不接這筆訂單",
+  orderBlock: "禁止下單",
+};
 
 /* ---------- 聊天內容 ---------- */
 
@@ -398,6 +420,14 @@ function MobileProgress({ d, onInfo }: { d: CustomerDetail; onInfo: () => void }
           <span className="font-bold text-leaf">資料與訂單 ›</span>
         </button>
       )}
+      {d.review && (
+        <button type="button" onClick={onInfo} className="flex items-center gap-2.5 rounded-[10px] border-2 border-[#E8A54B] bg-[#FFF6E8] px-3 py-2 text-left text-[13px]">
+          <span className="flex-1">
+            <b className="text-[#8A4B00]">大量訂單等你核准</b>　{d.review.lines} · <b>{money(d.review.total)}</b>
+          </span>
+          <span className="font-bold text-leaf">核准 ›</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -416,10 +446,40 @@ function Info({ d, busy, act }: { d: CustomerDetail; busy: string; act: (a: stri
   const [memo, setMemo] = useState(d.memo);
   const [saved, setSaved] = useState(false);
   const st = steps(d);
-  const data = d.draft?.data;
+  const data = d.draft?.data ?? d.review?.data;
 
   return (
     <>
+      {d.orderBlocked && (
+        <div className="rounded-xl border border-[#E5B9B4] bg-[#FBEDEB] p-3.5 text-sm">
+          <b className="text-[#9E2A1C]">禁止下單中</b>
+          <p className="mt-1 text-ink2">這位客人還是可以問問題，但不能在 LINE 下單；機器人會請他來電。</p>
+        </div>
+      )}
+
+      {d.review && (
+        <div className="rounded-xl border-2 border-[#E8A54B] bg-[#FFF6E8] p-3.5 text-sm">
+          <div className="mb-1 flex items-center gap-2">
+            <Badge bg="#B86A00" fg="#FFFFFF">
+              大量訂單等你核准
+            </Badge>
+            <span className="text-xs text-mute">{ago(d.review.at)}</span>
+          </div>
+          <p className="text-ink">
+            {d.review.lines} · <b>{money(d.review.total)}</b>
+          </p>
+          <p className="mb-2.5 text-xs text-[#8A4B00]">原因：{d.review.reason}。確認卡還沒傳給客人，下面是客人填的資料。</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={btn("pri")} disabled={!!busy} onClick={() => act("approve", {}, "核准這筆訂單，傳確認卡給客人？客人按「確認下單」後才會成立。")}>
+              核准並傳確認卡
+            </button>
+            <button type="button" className={btn()} disabled={!!busy} onClick={() => act("reject", {}, "不接這筆訂單？（不會通知客人，請自己回覆客人原因）")}>
+              不接這筆
+            </button>
+          </div>
+        </div>
+      )}
+
       {r.alert && (
         <div className="rounded-xl border border-[#F2C4BC] bg-[#FDECEA] p-3.5 text-sm">
           <div className="mb-1 flex items-center gap-2">
@@ -613,6 +673,20 @@ function Info({ d, busy, act }: { d: CustomerDetail; busy: string; act: (a: stri
           onClick={() => act("markLost", {}, "標記為「沒有下單」？等待確認的確認卡也會作廢。")}
         >
           標記：沒有下單
+        </button>
+        <button
+          type="button"
+          className={d.orderBlocked ? btn() : `${btn()} text-[#9E2A1C]`}
+          disabled={!!busy}
+          onClick={() =>
+            act(
+              "orderBlock",
+              { on: !d.orderBlocked },
+              d.orderBlocked ? "取消禁止下單？這位客人又可以在 LINE 下單。" : "禁止這位客人在 LINE 下單？他還是可以問問題；還沒確認的確認卡也會作廢。",
+            )
+          }
+        >
+          {d.orderBlocked ? "取消禁止下單" : "禁止下單"}
         </button>
       </div>
     </>

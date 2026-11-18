@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import type { OverviewData } from "@/lib/admin-data";
 import { ago, ALERT_UI, Avatar, Badge, card, ErrorBar, money, ProdBadge, STAGE_UI, usePoll, type Stage } from "./_ui/ui";
+import { UnlockTimer } from "./_ui/kit";
 
 const chatHref = (id: string | null) => (id ? `/admin/chat?u=${id}` : "/admin/orders");
 
@@ -17,7 +18,10 @@ export default function OverviewPage() {
     <main className="px-4 pb-10 pt-5 md:px-8 md:pt-7">
       <header className="mb-6 flex flex-wrap items-center gap-4">
         <div className="mr-auto flex flex-col gap-0.5">
-          <h1 className="text-[26px] font-bold">今天的客戶進度</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-[26px] font-bold">今天的客戶進度</h1>
+            <UnlockTimer />
+          </div>
           <span className="text-sm text-mute">
             {today}
             {d?.shop.map((s) => ` · ${s.label}${s.open === null ? "連不上" : s.open ? "接單中" : "已停止接單"}`)}

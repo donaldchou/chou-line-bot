@@ -1,5 +1,5 @@
 import { clearOrderCache, orderList } from "@/lib/admin-data";
-import { handleError, requireAdmin, requirePage } from "@/lib/auth";
+import { assertCode, handleError, requireAdmin, requirePage } from "@/lib/auth";
 import { isSys } from "@/lib/ll3";
 import { notifyShipped, NotifyError } from "@/lib/notify";
 
@@ -15,10 +15,11 @@ export async function GET(req: Request) {
   }
 }
 
-/** 「LINE 通知寄出」按鈕：只有管理者 */
+/** 「LINE 通知寄出」按鈕：只有管理者，需要驗證碼 */
 export async function POST(req: Request) {
   try {
-    await requireAdmin(req);
+    const admin = await requireAdmin(req);
+    await assertCode(req, admin, "傳寄出通知");
   } catch (err) {
     return handleError(err);
   }

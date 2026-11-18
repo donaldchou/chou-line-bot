@@ -2,24 +2,49 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { pageHref, pageLabel, pageOfPath, SYSTEM_HREF, USER_PAGES } from "@/lib/page-access";
 import { Icon, LineLogo, type IconName } from "./icons";
 import { logout, useMe } from "./me";
 
 /* 左側選單（照 chou-platform 的 app-shell：桌機浮動、可收合成只剩圖示、分組可展開收合；手機用抽屜） */
 
-type Item = { href: string; label: string; icon: IconName };
+type Item = { href: string; label: string; icon: IconName; key?: string };
+
+/** 選單旁的數字：總覽＝要找真人的客戶、LINE 訂單＝今天的訂單；每 30 秒更新 */
+type NavCounts = Record<string, number>;
+const COUNT_STYLE: Record<string, { cls: string; title: (n: number) => string }> = {
+  overview: { cls: "bg-[#E8590C] text-white", title: (n) => `${n} 位客戶要找真人` },
+  orders: { cls: "bg-linegreen text-white", title: (n) => `今天 ${n} 筆訂單` },
+};
+function useNavCounts(): NavCounts {
+  const [c, setC] = useState<NavCounts>({});
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch("/api/admin/nav-counts", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => alive && d && setC(d))
+        .catch(() => {});
+    load();
+    const t = setInterval(() => document.visibilityState === "visible" && load(), 30_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+  return c;
+}
 
 const ICON: Record<string, IconName> = { overview: "grid", customers: "users", chat: "chat", push: "send", orders: "box", capacity: "sliders", qa: "help" };
 
 const NAV: { group: string; items: Item[] }[] = [...new Set(USER_PAGES.map((p) => p.group))].map((group) => ({
   group,
-  items: USER_PAGES.filter((p) => p.group === group).map((p) => ({ href: p.href, label: p.label, icon: ICON[p.key] })),
+  items: USER_PAGES.filter((p) => p.group === group).map((p) => ({ href: p.href, label: p.label, icon: ICON[p.key], key: p.key })),
 }));
 
 /** 只有管理者看得到的選單 */
-const ADMIN_NAV = { group: "系統", items: [{ href: SYSTEM_HREF, label: "後台管理", icon: "shield" as IconName }] };
+const ADMIN_NAV: { group: string; items: Item[] } = { group: "系統", items: [{ href: SYSTEM_HREF, label: "後台管理", icon: "shield" }] };
 
 /* ---------------- 側邊選單收合狀態，記在這台電腦的瀏覽器 ---------------- */
 function localFlag<T extends string>(key: string, fallback: T) {
@@ -83,6 +108,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const setCollapsed = (v: boolean) => setCollapsedRaw(v ? "1" : "0");
   const [closedGroups, toggleGroup, toggleAllGroups] = useClosedGroups();
   const me = useMe();
+  const counts = useNavCounts();
 
   // 一般使用者：只顯示後台「頁面權限」開給他的頁面；還沒載入完先全部顯示
   const groups =
@@ -149,22 +175,37 @@ export function Shell({ children }: { children: ReactNode }) {
                 </button>
               )}
               {isOpen &&
-                g.items.map((it) => (
-                  <Link
-                    key={it.href}
-                    href={it.href}
-                    onClick={() => setOpen(false)}
-                    title={mini ? it.label : undefined}
-                    aria-label={mini ? it.label : undefined}
-                    aria-current={isActive(it.href) ? "page" : undefined}
-                    className={`flex min-h-11 items-center gap-3 rounded-lg text-[15px] transition-colors ${mini ? "justify-center px-0" : "px-3"} ${
-                      isActive(it.href) ? "bg-forest3 font-bold text-white" : "text-[#CFE0D6] hover:bg-forest2 hover:text-white"
-                    }`}
-                  >
-                    <Icon name={it.icon} />
-                    {!mini && <span className="truncate">{it.label}</span>}
-                  </Link>
-                ))}
+                g.items.map((it) => {
+                  const n = (it.key && counts[it.key]) || 0;
+                  const st = it.key ? COUNT_STYLE[it.key] : undefined;
+                  const tip = n && st ? st.title(n) : "";
+                  return (
+                    <Link
+                      key={it.href}
+                      href={it.href}
+                      onClick={() => setOpen(false)}
+                      title={mini ? [it.label, tip].filter(Boolean).join("：") : tip || undefined}
+                      aria-label={mini || tip ? [it.label, tip].filter(Boolean).join("，") : undefined}
+                      aria-current={isActive(it.href) ? "page" : undefined}
+                      className={`relative flex min-h-11 items-center gap-3 rounded-lg text-[15px] transition-colors ${mini ? "justify-center px-0" : "px-3"} ${
+                        isActive(it.href) ? "bg-forest3 font-bold text-white" : "text-[#CFE0D6] hover:bg-forest2 hover:text-white"
+                      }`}
+                    >
+                      <Icon name={it.icon} />
+                      {!mini && <span className="truncate">{it.label}</span>}
+                      {n > 0 && st && (
+                        <span
+                          aria-hidden="true"
+                          className={`rounded-full text-center font-bold tabular-nums ${st.cls} ${
+                            mini ? "absolute right-1 top-1 min-w-[18px] px-1 text-[10px] leading-[18px]" : "ml-auto min-w-[22px] px-1.5 text-xs leading-[22px]"
+                          }`}
+                        >
+                          {n > 99 ? "99+" : n}
+                        </span>
+                      )}
+                    </Link>
+                  );
+                })}
             </div>
           );
         })}

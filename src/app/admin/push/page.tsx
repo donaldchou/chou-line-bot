@@ -5,7 +5,7 @@ import type { BroadcastPageData } from "@/lib/broadcast";
 import type { CustomersData } from "@/lib/admin-data";
 import { SEGMENTS } from "@/lib/segments";
 import { Icon } from "../_ui/icons";
-import { call, errMsg, inputCls, PageHeader, UnlockTimer, useCodeGate } from "../_ui/kit";
+import { call, errMsg, inputCls, PageHeader, UnlockTimer, useCodeGate, useGatedAction } from "../_ui/kit";
 import { useCanEdit } from "../_ui/me";
 import { btn, card, ErrorBar, mdhm, SYS_LABEL, usePoll } from "../_ui/ui";
 
@@ -88,18 +88,25 @@ export default function PushPage() {
       },
     });
 
-  const cancel = async (id: string) => {
-    if (!confirm("取消這筆排定的群發？")) return;
-    setBusy(id);
-    try {
-      await call("/api/admin/push", { method: "POST", json: { action: "cancel", id } });
-      await reload();
-    } catch (e) {
-      setMsg({ ok: false, text: errMsg(e) });
-    } finally {
-      setBusy("");
-    }
-  };
+  const cancel = (id: string) =>
+    gate.ask({
+      title: "取消排程",
+      confirmLabel: "取消這筆群發",
+      danger: true,
+      message: "取消這筆排定的群發？",
+      submit: async (code) => {
+        setBusy(id);
+        try {
+          await call("/api/admin/push", { method: "POST", json: { action: "cancel", id }, code });
+          await reload();
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: errMsg(e) };
+        } finally {
+          setBusy("");
+        }
+      },
+    });
 
   const q = d?.quota;
   const left = q && q.limit !== null ? Math.max(0, q.limit - q.used) : null;
@@ -330,18 +337,23 @@ function TestSend({
   const [busy, setBusy] = useState(false);
   const { data } = usePoll<CustomersData>(open && search ? `/api/admin/customers?q=${encodeURIComponent(search)}` : null, 600_000);
 
-  const test = async (userId: string, name: string) => {
-    setBusy(true);
-    try {
-      await call("/api/admin/push", { method: "POST", json: { action: "test", ...content, userId } });
-      onResult({ ok: true, text: `已傳給 ${name} 測試（用掉 1 則訊息，不算群發）` });
-      setOpen(false);
-    } catch (e) {
-      onResult({ ok: false, text: errMsg(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
+  const gated = useGatedAction();
+  const test = (userId: string, name: string) =>
+    gated.run({
+      title: "測試傳送",
+      confirmLabel: "傳送",
+      message: `先傳給 ${name} 測試？（用掉 1 則訊息，不算群發）`,
+      action: async (code) => {
+        setBusy(true);
+        try {
+          await call("/api/admin/push", { method: "POST", json: { action: "test", ...content, userId }, code });
+          onResult({ ok: true, text: `已傳給 ${name} 測試（用掉 1 則訊息，不算群發）` });
+          setOpen(false);
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
 
   return (
     <div className="relative">
@@ -374,6 +386,7 @@ function TestSend({
           </div>
         </div>
       )}
+      {gated.dialog}
     </div>
   );
 }

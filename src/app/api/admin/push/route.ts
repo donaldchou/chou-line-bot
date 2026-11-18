@@ -35,6 +35,7 @@ export async function POST(req: Request) {
         case "test": {
           const userId = String(body.userId ?? "");
           if (!/^U[0-9a-f]{32}$/.test(userId)) throw new HttpError(400, "請選要測試的 LINE 好友");
+          await assertCode(req, admin, "測試傳送");
           await testBroadcast(parseInput(body), userId);
           return Response.json({ ok: true });
         }
@@ -47,6 +48,7 @@ export async function POST(req: Request) {
           return Response.json({ ok: true, status: b.status, sent: "sent" in b ? b.sent : 0 });
         }
         case "cancel":
+          await assertCode(req, admin, "取消排程");
           await cancelBroadcast(String(body.id ?? ""));
           return Response.json({ ok: true });
         default:

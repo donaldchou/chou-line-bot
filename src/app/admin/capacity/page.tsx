@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { CapacityData, CapStatus } from "@/lib/capacity";
-import { call, errMsg, inputCls, PageHeader } from "../_ui/kit";
+import { call, errMsg, inputCls, PageHeader, UnlockTimer, useCodeGate } from "../_ui/kit";
 import { useCanEdit } from "../_ui/me";
 import { btn, card, ErrorBar, money, usePoll } from "../_ui/ui";
 
@@ -17,25 +17,34 @@ export default function CapacityPage() {
   const canEdit = useCanEdit();
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const gate = useCodeGate();
 
-  const save = async (key: string, json: unknown) => {
-    setBusy(key);
-    setErr("");
-    try {
-      await call("/api/admin/capacity", { method: "POST", json });
-      await reload();
-    } catch (e) {
-      setErr(errMsg(e));
-    } finally {
-      setBusy("");
-    }
-  };
+  // 每個修改都要驗證碼（後台解鎖期間不用再輸入）
+  const save = (key: string, json: unknown, what = "接單設定") =>
+    gate.ask({
+      title: `修改${what}`,
+      confirmLabel: "確認修改",
+      message: `修改${what}需要驗證碼。`,
+      submit: async (code) => {
+        setBusy(key);
+        setErr("");
+        try {
+          await call("/api/admin/capacity", { method: "POST", json, code });
+          await reload();
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: errMsg(e) };
+        } finally {
+          setBusy("");
+        }
+      },
+    });
 
   const week = d ? new Date(d.weekStart).toLocaleDateString("zh-TW", { timeZone: "Asia/Taipei", month: "numeric", day: "numeric" }) : "";
 
   return (
     <main className="px-4 pb-10 pt-5 md:px-8 md:pt-7">
-      <PageHeader title="接單設定" desc="貨不夠或出貨排不下時在這裡切換；機器人會照設定回覆客人，不再收這個規格的單。上限只算 LINE 訂單，網站訂單不算。" />
+      <PageHeader title="接單設定" badge={<UnlockTimer />} desc="貨不夠或出貨排不下時在這裡切換；機器人會照設定回覆客人，不再收這個規格的單。上限只算 LINE 訂單，網站訂單不算。" />
       <ErrorBar messages={[error, err]} />
       {!d && !error && <p className="text-mute">載入中…</p>}
 
@@ -124,9 +133,11 @@ export default function CapacityPage() {
             </section>
           ))}
 
-          <Replies key={`${d.replies.full}|${d.replies.stop}`} replies={d.replies} disabled={!canEdit || !!busy} onSave={(replies) => save("replies", { replies })} />
+          <Replies key={`${d.replies.full}|${d.replies.stop}`} replies={d.replies} disabled={!canEdit || !!busy} onSave={(replies) => save("replies", { replies }, "機器人回覆")} />
+          <Guard key={JSON.stringify(d.guard)} guard={d.guard} disabled={!canEdit || !!busy} onSave={(guard) => save("guard", { guard }, "防止惡意訂購設定")} />
         </div>
       )}
+      {gate.dialog}
     </main>
   );
 }
@@ -144,7 +155,7 @@ function CapInput({ sold, cap, disabled, label, onSave }: { sold: number; cap: n
     >
       <b>{sold}</b>
       <span className="text-mute">/</span>
-      <input type="number" min={0} value={v} placeholder="不限" aria-label={label} disabled={disabled} onChange={(e) => setV(e.target.value)} className={`${inputCls} w-20`} />
+      <input type="number" min={0} value={v} placeholder="不限" aria-label={label} disabled={disabled} onChange={(e) => setV(e.target.value)} className={`${inputCls} w-20!`} />
       <span className="text-mute">盒</span>
       {changed && (
         <button type="submit" disabled={disabled} className={btn("pri")}>
@@ -152,6 +163,73 @@ function CapInput({ sold, cap, disabled, label, onSave }: { sold: number; cap: n
         </button>
       )}
     </form>
+  );
+}
+
+type GuardData = CapacityData["guard"];
+const GUARD_FIELDS: { key: keyof GuardData; title: string; before: string; unit: string; hint: string }[] = [
+  { key: "maxPerDay", title: "① 每人下單筆數上限", before: "同一個 LINE 帳號 24 小時內最多", unit: "筆", hint: "超過時機器人請客人來電，並通知你。" },
+  { key: "bigBoxes", title: "② 大量訂單：盒數", before: "一筆訂單超過", unit: "盒", hint: "先不傳確認卡，通知你到對話頁核准。" },
+  { key: "bigCod", title: "② 大量訂單：貨到付款金額", before: "貨到付款金額超過", unit: "元", hint: "同上，避免有人亂訂後拒收。匯款、刷卡不受影響。" },
+  { key: "msgPerMin", title: "⑤ 防洗訊息", before: "同一人 1 分鐘內超過", unit: "則", hint: "機器人提醒一次後暫停回覆 1 分鐘，並通知你，避免被刷 AI 費用。" },
+];
+
+/** 防止惡意訂購的參數（0＝不限／關閉）；③ 禁止下單在對話頁的客戶資料裡設定 */
+function Guard({ guard, disabled, onSave }: { guard: GuardData; disabled: boolean; onSave: (g: GuardData) => void }) {
+  const [g, setG] = useState<Record<keyof GuardData, string>>(
+    () => Object.fromEntries(Object.entries(guard).map(([k, v]) => [k, String(v)])) as Record<keyof GuardData, string>,
+  );
+  const changed = GUARD_FIELDS.some((f) => g[f.key] !== String(guard[f.key]));
+  const valid = GUARD_FIELDS.every((f) => /^\d+$/.test(g[f.key].trim()));
+  return (
+    <section aria-labelledby="guard" className={`${card} flex flex-col gap-3 px-5 py-4`}>
+      <h2 id="guard" className="text-lg font-bold">
+        防止惡意訂購
+      </h2>
+      <p className="-mt-2 text-[13px] text-mute">填 0＝不限制（關閉這項）。③ 禁止下單：到「對話」頁打開客人的資料，按「禁止下單」。</p>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {GUARD_FIELDS.map((f) => (
+          <div key={f.key} className="rounded-xl border border-line p-3.5">
+            <div className="mb-2 text-sm font-bold">{f.title}</div>
+            <label className="flex flex-wrap items-center gap-2 text-sm">
+              {f.before}
+              <input
+                type="number"
+                min={0}
+                inputMode="numeric"
+                value={g[f.key]}
+                disabled={disabled}
+                onChange={(e) => setG({ ...g, [f.key]: e.target.value })}
+                className={`${inputCls} ${f.key === "bigCod" ? "w-28!" : "w-20!"}`}
+              />
+              {f.unit}
+              {g[f.key].trim() === "0" && <span className="rounded-full bg-[#ECEDEB] px-2 py-0.5 text-xs font-bold text-[#4F5A53]">已關閉</span>}
+            </label>
+            <p className="mt-1.5 text-xs text-mute">{f.hint}</p>
+          </div>
+        ))}
+      </div>
+      {changed && (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className={btn()}
+            onClick={() => setG(Object.fromEntries(Object.entries(guard).map(([k, v]) => [k, String(v)])) as Record<keyof GuardData, string>)}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            className={btn("pri")}
+            disabled={disabled || !valid}
+            onClick={() => onSave(Object.fromEntries(GUARD_FIELDS.map((f) => [f.key, Number(g[f.key])])) as GuardData)}
+          >
+            儲存設定
+          </button>
+          {!valid && <span className="text-sm text-[#9E2A1C]">請填 0 以上的整數</span>}
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { connectDB } from "./mongodb";
-import { AdminSetting, AlertLog, LineUser, QaCategory, QaItem, type QaCategoryDoc, type QaItemDoc, type QaSendMode } from "./models";
+import { AdminSetting, AlertLog, LineUser, QaCategory, QaItem, Trash, type QaCategoryDoc, type QaItemDoc, type QaSendMode, type TrashDoc } from "./models";
 import { SEED_CATEGORIES, SEED_QA } from "./knowledge";
 import { deletePhoto, PHOTO_NAME } from "./ll3-file";
 
@@ -226,9 +226,11 @@ export async function saveItem(draft: QaDraft, by: string, id?: string) {
 const photosOf = (i: Partial<Pick<QaItemDoc, "productPhotos" | "pricePhotos">>) => [...(i.productPhotos ?? []), ...(i.pricePhotos ?? [])];
 
 /** 刪掉 ll3 上沒有任何問答在用的照片（複製的問答會共用同一張，所以要先查） */
+/** 沒有任何問答（含已刪除紀錄裡可以還原的）用到的照片，才從 ll3 刪掉 */
 export async function cleanupPhotos(names: string[]) {
   for (const n of new Set(names)) {
     if (await QaItem.exists({ $or: [{ productPhotos: n }, { pricePhotos: n }] })) continue;
+    if (await Trash.exists({ kind: "qa", $or: [{ "data.productPhotos": n }, { "data.pricePhotos": n }] })) continue;
     await deletePhoto(n).catch((e) => console.error("deletePhoto", n, e));
   }
 }
@@ -239,11 +241,78 @@ export async function setActive(id: string, active: boolean, by: string) {
   if (!r.matchedCount) throw new QaError("找不到這則問答");
 }
 
-export async function deleteItem(id: string) {
+/** 刪除：先備份到「已刪除紀錄」（照片留著），後台管理可以還原 */
+export async function deleteItem(id: string, by: string) {
   await connectDB();
-  const old = await QaItem.findOneAndDelete({ _id: id }).lean<QaItemDoc>();
+  const old = await QaItem.findById(id).lean<QaItemDoc>();
   if (!old) throw new QaError("找不到這則問答");
-  await cleanupPhotos(photosOf(old));
+  await Trash.create({ _id: newId() + newId(), kind: "qa", docId: id, data: { ...old }, deletedAt: new Date(), deletedBy: by });
+  await QaItem.deleteOne({ _id: id });
+}
+
+/* ---------------- 已刪除紀錄 ---------------- */
+
+export type TrashView = {
+  id: string;
+  kind: "qa";
+  q: string;
+  cat: string;
+  catName: string;
+  catGone: boolean;
+  answer: string;
+  photos: number;
+  deletedAt: string;
+  deletedBy: string;
+  data: Record<string, unknown>;
+};
+
+export async function trashList(): Promise<TrashView[]> {
+  await connectDB();
+  const [rows, cats] = await Promise.all([Trash.find({ kind: "qa" }).sort({ deletedAt: -1 }).limit(500).lean<TrashDoc[]>(), sortedCats()]);
+  const catName = new Map(cats.map((c) => [c._id, c.name]));
+  return rows.map((t) => {
+    const d = t.data as Partial<QaItemDoc>;
+    return {
+      id: t._id,
+      kind: "qa",
+      q: d.q ?? "",
+      cat: d.cat ?? "",
+      catName: catName.get(d.cat ?? "") ?? "",
+      catGone: !catName.has(d.cat ?? ""),
+      answer: d.a ?? "",
+      photos: photosOf(d).length,
+      deletedAt: new Date(t.deletedAt).toISOString(),
+      deletedBy: t.deletedBy,
+      data: t.data,
+    };
+  });
+}
+
+/** 還原：用原本的 id 寫回；分類已經刪掉時放到第一個分類 */
+export async function restoreTrash(id: string, by: string) {
+  await connectDB();
+  const t = await Trash.findById(id).lean<TrashDoc>();
+  if (!t) throw new QaError("找不到這筆已刪除紀錄（可能已經還原或永久刪除）");
+  if (await QaItem.exists({ _id: t.docId })) throw new QaError("問答管理裡已經有這則問答，不能重複還原");
+  const data = { ...(t.data as Partial<QaItemDoc>) };
+  let note = "";
+  if (!(await QaCategory.exists({ _id: data.cat }))) {
+    const first = (await sortedCats())[0];
+    if (!first) throw new QaError("問答管理沒有任何分類，請先新增分類再還原");
+    data.cat = first._id;
+    note = `原本的分類已刪除，放到「${first.name}」`;
+  }
+  await QaItem.create({ ...data, _id: t.docId, updatedAt: new Date(), updatedBy: by });
+  await Trash.deleteOne({ _id: id });
+  return { note };
+}
+
+/** 永久刪除：連同沒有其他問答使用的照片 */
+export async function purgeTrash(id: string) {
+  await connectDB();
+  const t = await Trash.findOneAndDelete({ _id: id }).lean<TrashDoc>();
+  if (!t) throw new QaError("找不到這筆已刪除紀錄");
+  await cleanupPhotos(photosOf(t.data as Partial<QaItemDoc>));
 }
 
 /** 分類：整份清單照順序送來；沒有 id 的是新增，原本有、清單裡沒有的是刪除（裡面還有問答就不能刪） */

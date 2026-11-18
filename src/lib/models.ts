@@ -32,6 +32,8 @@ export interface LineUserDoc {
   botPausedUntil?: Date | null;
   /** 農場備註（客人看不到） */
   memo?: string;
+  /** 禁止在 LINE 下單（還是可以問問題） */
+  orderBlocked?: boolean;
   /** 最後一則訊息（列表顯示用） */
   lastText?: string;
   lastRole?: "user" | "model";
@@ -63,6 +65,7 @@ const LineUserSchema = new Schema<LineUserDoc>(
     alert: { type: new Schema({ kind: String, text: String, at: Date }, { _id: false }), default: null },
     botPausedUntil: { type: Date, default: null },
     memo: { type: String, default: "" },
+    orderBlocked: { type: Boolean, default: false },
     lastText: String,
     lastRole: String,
     lastAt: Date,
@@ -99,9 +102,12 @@ export interface OrderDraftDoc {
   _id: string;
   userId: string;
   sys: Sys;
-  status: "pending" | "creating" | "created" | "cancelled";
+  /** review＝大量訂單，等農場主人核准後才傳確認卡（核准後變 pending） */
+  status: "review" | "pending" | "creating" | "created" | "cancelled";
   data: OrderInput;
   quote: Quote;
+  /** 為什麼要核准、誰核准的 */
+  review?: { reason: string; approvedAt?: Date; approvedBy?: string } | null;
   orderId?: number;
   /** 客人按「確認下單」、訂單建立的時間 */
   orderedAt?: Date;
@@ -140,6 +146,7 @@ const OrderDraftSchema = new Schema<OrderDraftDoc>(
     status: { type: String, default: "pending" },
     data: { type: Schema.Types.Mixed, required: true },
     quote: { type: Schema.Types.Mixed, required: true },
+    review: { type: Schema.Types.Mixed, default: null },
     orderId: Number,
     orderedAt: Date,
     error: String,
@@ -370,6 +377,32 @@ const AdminUserSchema = new Schema<AdminUserDoc>(
 
 /** 後台設定（_id = 設定名稱，例如 pageAccess） */
 const AdminSettingSchema = new Schema({ _id: { type: String, required: true }, allowed: [String] }, { versionKey: false, strict: false });
+
+/** 已刪除紀錄（同 chou-platform）：刪除時先備份到這裡，後台管理可以還原或永久刪除 */
+export const TRASH_KINDS = ["qa"] as const;
+export type TrashKind = (typeof TRASH_KINDS)[number];
+export interface TrashDoc {
+  _id: string;
+  kind: TrashKind;
+  /** 原本的 _id，還原時用同一個 */
+  docId: string;
+  /** 刪除前的整筆資料 */
+  data: Record<string, unknown>;
+  deletedAt: Date;
+  deletedBy: string;
+}
+const TrashSchema = new Schema<TrashDoc>(
+  {
+    _id: { type: String, required: true },
+    kind: { type: String, required: true, index: true },
+    docId: { type: String, required: true },
+    data: { type: Schema.Types.Mixed, required: true },
+    deletedAt: { type: Date, default: () => new Date(), index: true },
+    deletedBy: { type: String, default: "" },
+  },
+  { versionKey: false },
+);
+export const Trash = (models.Trash as Model<TrashDoc>) || model<TrashDoc>("Trash", TrashSchema, "trash");
 
 export const AdminUser =
   (models.AdminUser as Model<AdminUserDoc>) || model<AdminUserDoc>("AdminUser", AdminUserSchema, "adminUsers");

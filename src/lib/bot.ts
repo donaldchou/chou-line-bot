@@ -34,6 +34,7 @@ import { confirmCard, deliveryText, orderCarousel, payText, photoAlbum, productC
 import { imgSig } from "./sign";
 import { CAP_LABEL, capReplies, checkCapacity, productCaps } from "./capacity";
 import { linksIn, photoSummary, qaPromptText, sendsPhotos } from "./qa";
+import { bigOrderReason, guardSettings, messagesLastMinute, ordersLast24h } from "./guard";
 
 const HISTORY = 30;
 const DRAFT_DAYS = 3;
@@ -178,6 +179,24 @@ export function qaPhotoMessages(i: Pick<QaItemDoc, "productPhotos" | "pricePhoto
     ...(i.productPhotos?.length ? [photoAlbum("產品照片", i.productPhotos.map(qaPhotoUrl))] : []),
     ...(i.pricePhotos?.length ? [photoAlbum("價格照片", i.pricePhotos.map(qaPhotoUrl))] : []),
   ];
+}
+
+/**
+ * ③ 禁止下單、① 24 小時內筆數上限：不能下單時回傳要跟客人說的話。
+ * alert：要通知農場主人的內容（禁止下單名單的客人不另外通知）
+ */
+async function orderBlockedReply(userId: string): Promise<{ reply: string; alert?: string } | null> {
+  const [u, s] = await Promise.all([LineUser.findById(userId, { orderBlocked: 1 }).lean<Pick<LineUserDoc, "orderBlocked">>(), guardSettings()]);
+  if (u?.orderBlocked) return { reply: `不好意思，這個帳號目前無法在 LINE 下單，需要訂購請來電 ${FARM.phone}，由專人為您服務。` };
+  if (s.maxPerDay) {
+    const n = await ordersLast24h(userId);
+    if (n >= s.maxPerDay)
+      return {
+        reply: `不好意思，LINE 上同一個帳號 24 小時內最多下 ${s.maxPerDay} 筆訂單，您已經訂了 ${n} 筆。還需要訂購的話請來電 ${FARM.phone}，謝謝您！`,
+        alert: `客人 24 小時內已經訂了 ${n} 筆，達到上限 ${s.maxPerDay} 筆，還想再訂`,
+      };
+  }
+  return null;
 }
 
 /** 通知農場：客戶列表亮提醒＋留紀錄（總覽「機器人表現」、問答管理「答不出來的問題」用） */
@@ -383,6 +402,13 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
         data.recipientName = data.recipientPhone = data.recipientPhone2 = undefined;
       }
 
+      // ③ 禁止下單名單、① 24 小時內筆數上限
+      const blocked = await orderBlockedReply(t.user._id);
+      if (blocked) {
+        if (blocked.alert) await raiseAlert(t, "human", blocked.alert);
+        return { error: "這位客人現在不能在 LINE 下單", reply: blocked.reply, note: "照 reply 的意思回覆客人，不要再呼叫 prepare_order" };
+      }
+
       const p = await getProducts(sys);
       if (!p.open) return { error: `${SYS_INFO[sys].label}目前沒有開放訂購`, closedMessage: p.closedMsg };
       // AI 有時會自己編貨號（例如 kaki-8）：用數字對回「8粒裝」，對不到就把正確貨號給它重試
@@ -414,10 +440,26 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
         throw e;
       }
       // 之前還沒確認的訂單作廢，只留這一張
-      await OrderDraft.updateMany({ userId: t.user._id, status: "pending" }, { $set: { status: "cancelled" } });
+      await OrderDraft.updateMany({ userId: t.user._id, status: { $in: ["pending", "review"] } }, { $set: { status: "cancelled" } });
+      const lines = q.lines.map((l) => `${l.name}x${l.qty}`).join("、");
+
+      // ② 大量訂單：先不傳確認卡，等農場主人在後台核准
+      const big = bigOrderReason(q, data.pay, await guardSettings());
+      if (big) {
+        await OrderDraft.create({ _id: randomUUID().replace(/-/g, ""), userId: t.user._id, sys, data, quote: q, status: "review", review: { reason: big } });
+        await raiseAlert(t, "human", `大量訂單等你核准（${big}）：${SYS_INFO[sys].label} ${lines}，${q.total} 元。到對話頁按「核准並傳確認卡」`);
+        t.notes.push(`[訂單等農場主人核准，還沒傳確認卡：${SYS_INFO[sys].label} ${lines}，總金額 ${q.total} 元]`);
+        await setStage(t.user._id, "confirm", { sys, contact: { name: data.buyerName, phone: data.buyerPhone } });
+        return {
+          held: true,
+          total: q.total,
+          note: "這筆訂單數量或金額比較大，要先由農場主人確認。請告訴客人：資料已收到，農場主人確認後會傳確認卡給他，再按確認下單就完成；急的話可以來電。絕對不能說訂單已成立。",
+        };
+      }
+
       const draft = await OrderDraft.create({ _id: randomUUID().replace(/-/g, ""), userId: t.user._id, sys, data, quote: q });
       t.out.push(confirmCard(draft.toObject()));
-      t.notes.push(`[已傳送確認卡：${SYS_INFO[sys].label} ${q.lines.map((l) => `${l.name}x${l.qty}`).join("、")}，訂購者 ${data.buyerName} ${data.buyerPhone}，收件者 ${data.recipientSame ? "同訂購者" : `${data.recipientName} ${data.recipientPhone}`}，地址 ${data.address}，${deliveryText(data.delivery)}，${payText(data.pay)}，總金額 ${q.total} 元；等客人按確認下單]`);
+      t.notes.push(`[已傳送確認卡：${SYS_INFO[sys].label} ${lines}，訂購者 ${data.buyerName} ${data.buyerPhone}，收件者 ${data.recipientSame ? "同訂購者" : `${data.recipientName} ${data.recipientPhone}`}，地址 ${data.address}，${deliveryText(data.delivery)}，${payText(data.pay)}，總金額 ${q.total} 元；等客人按確認下單]`);
       await markInterest(t.user, sys);
       await setStage(t.user._id, "confirm", { sys, contact: { name: data.buyerName, phone: data.buyerPhone } });
       return { ok: true, total: q.total, ship: q.ship, codFee: q.cod, boxes: q.boxes, note: "確認卡已傳給客人，請客人核對後按「確認下單」" };
@@ -529,6 +571,22 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   await saveMsg(userId, "user", text);
   // 農場真人接手中：機器人不回，訊息留在後台
   if (botPaused(user)) return;
+
+  // ⑤ 1 分鐘內訊息太多：只在剛超過時提醒一次並通知農場，之後不回（不呼叫 AI，避免被洗費用）
+  const flood = await guardSettings()
+    .then(async (s) => (s.msgPerMin ? { limit: s.msgPerMin, n: await messagesLastMinute(userId) } : null))
+    .catch(() => null);
+  if (flood && flood.n > flood.limit) {
+    if (flood.n === flood.limit + 1) {
+      const msg = "您的訊息有點多，我需要一點時間整理，請稍等一分鐘後再傳，謝謝您！";
+      await send(userId, replyToken, [textMsg(msg)]);
+      await saveMsg(userId, "model", msg);
+      const tt = { user, text } as Turn;
+      tt.notes = [];
+      await raiseAlert(tt, "human", `客人 1 分鐘內傳了超過 ${flood.limit} 則訊息，機器人先暫停回覆 1 分鐘`).catch((e) => console.error("raiseAlert", e));
+    }
+    return;
+  }
   void showLoading(userId, 30);
 
   const t: Turn = { user, text, out: [], quick: [], notes: [], flagged: false, toolErrors: [], qaPhotos: null, links: [] };
@@ -635,6 +693,15 @@ async function confirmOrder(user: LineUserDoc, ref: string, replyToken: string) 
           : "這張確認卡已經失效（可能已修改過或超過 3 天），請再告訴我一次要訂的內容，我重新整理給您確認。";
     await send(userId, replyToken, [textMsg(msg)]);
     await saveMsg(userId, "model", msg);
+    return;
+  }
+
+  // 送出確認卡之後才被禁止下單、或 24 小時內筆數已達上限：這張不能成立
+  const blocked = await orderBlockedReply(userId);
+  if (blocked) {
+    await OrderDraft.updateOne({ _id: ref }, { $set: { status: "cancelled", error: "guard: blocked or daily limit" } });
+    await send(userId, replyToken, [textMsg(blocked.reply)]);
+    await saveMsg(userId, "model", blocked.reply);
     return;
   }
 

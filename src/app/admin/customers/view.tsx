@@ -7,6 +7,7 @@ import type { CustomersData } from "@/lib/admin-data";
 import { ago, Avatar, btn, card, chip, ErrorBar, money, ProdBadge, SegBadges, STAGE_KEYS, STAGE_UI, StageBadge, usePoll } from "../_ui/ui";
 import { SEGMENTS } from "@/lib/segments";
 import { VipCard } from "./vip";
+import { UnlockTimer } from "../_ui/kit";
 
 export function CustomersView() {
   const sp = useSearchParams();
@@ -37,7 +38,10 @@ export function CustomersView() {
     <main className="px-4 pb-10 pt-5 md:px-8 md:pt-7">
       <header className="mb-4 flex flex-wrap items-center gap-4">
         <div className="mr-auto flex flex-col gap-0.5">
-          <h1 className="text-[26px] font-bold">客戶</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-[26px] font-bold">客戶</h1>
+            <UnlockTimer />
+          </div>
           <span className="text-sm text-mute">加過 LINE 好友的客戶共 {d?.stageCount.all ?? "…"} 位 · 依最後聯絡時間排序</span>
         </div>
         <form

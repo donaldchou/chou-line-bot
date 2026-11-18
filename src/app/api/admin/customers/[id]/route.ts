@@ -1,6 +1,6 @@
 import { customerDetail } from "@/lib/admin-data";
 import { ActionError, customerAction } from "@/lib/admin-actions";
-import { handleError, requireAdmin, requirePage } from "@/lib/auth";
+import { assertCode, handleError, requireAdmin, requirePage } from "@/lib/auth";
 
 export const maxDuration = 60;
 
@@ -23,7 +23,9 @@ export async function GET(req: Request, ctx: RouteContext<"/api/admin/customers/
 export async function POST(req: Request, ctx: RouteContext<"/api/admin/customers/[id]">) {
   let by = "";
   try {
-    by = (await requireAdmin(req)).email;
+    const admin = await requireAdmin(req);
+    await assertCode(req, admin, "操作");
+    by = admin.email;
   } catch (err) {
     return handleError(err);
   }

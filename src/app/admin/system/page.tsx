@@ -6,10 +6,11 @@ import { call, Card, dangerBtn, errMsg, Field, inputCls, Modal, PageHeader, smal
 import { useMe } from "../_ui/me";
 import { btn, card, ErrorBar } from "../_ui/ui";
 import { USER_PAGES, type PageAccessSettings, type PageKey } from "@/lib/page-access";
-import type { AiStatus } from "@/lib/ai";
+import { AI_MODELS, KEY_LABEL, modelLabel, type AiChoice, type AiStatus } from "@/lib/ai-models";
+import type { TrashView } from "@/lib/qa";
 
-type Tab = "ai" | "users" | "access" | "data";
-const TABS: Tab[] = ["ai", "users", "access", "data"];
+type Tab = "ai" | "users" | "access" | "data" | "trash";
+const TABS: Tab[] = ["ai", "users", "access", "data", "trash"];
 
 /* ---------------- 目前分頁，記在這台電腦的瀏覽器（重新整理後保留） ---------------- */
 const TAB_KEY = "chou-line-admin-tab";
@@ -65,9 +66,10 @@ export default function SystemPage() {
           { value: "users", label: "使用者管理" },
           { value: "access", label: "頁面權限" },
           { value: "data", label: "所有資料" },
+          { value: "trash", label: "已刪除紀錄" },
         ]}
       />
-      {tab === "ai" ? <AiTab /> : tab === "users" ? <UsersTab /> : tab === "access" ? <AccessTab /> : <DataTab />}
+      {tab === "ai" ? <AiTab /> : tab === "users" ? <UsersTab /> : tab === "access" ? <AccessTab /> : tab === "data" ? <DataTab /> : <TrashTab />}
     </main>
   );
 }
@@ -84,32 +86,217 @@ async function verifyCode(code: string): Promise<CodeResult> {
 
 const fmtTime = (s: string | null) => (s ? new Date(s).toLocaleString("zh-TW", { hour12: false, timeZone: "Asia/Taipei" }) : "—");
 
+/* ---------------- 已刪除紀錄（問答管理；同 chou-platform） ---------------- */
+function TrashTab() {
+  const [items, setItems] = useState<TrashView[] | null>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [viewing, setViewing] = useState<TrashView | null>(null);
+  const gate = useCodeGate();
+
+  useEffect(() => {
+    call<TrashView[]>("/api/admin/system/trash").then(setItems, (e) => setError(errMsg(e)));
+  }, []);
+
+  function act(t: TrashView, method: "POST" | "DELETE") {
+    const restore = method === "POST";
+    gate.ask({
+      title: restore ? "還原紀錄" : "永久刪除",
+      confirmLabel: restore ? "確認還原" : "確認永久刪除",
+      danger: !restore,
+      message: restore ? (
+        <>
+          即將還原問答「<b>{t.q}</b>」，還原後會回到問答管理，機器人馬上會用。
+        </>
+      ) : (
+        <>
+          即將永久刪除問答「<b>{t.q}</b>」的備份（連同照片），之後無法再還原。
+        </>
+      ),
+      submit: async (code) => {
+        try {
+          const r = await call<{ note?: string }>(`/api/admin/system/trash/${t.id}`, { method, code });
+          setNotice(restore ? `已還原「${t.q}」${r.note ? `（${r.note}）` : ""}` : `已永久刪除「${t.q}」`);
+        } catch (e) {
+          return { ok: false, error: errMsg(e) };
+        }
+        setItems((l) => l?.filter((x) => x.id !== t.id) ?? null);
+        setViewing(null);
+        return { ok: true };
+      },
+    });
+  }
+
+  return (
+    <>
+      <p className="mb-4 text-sm text-mute">在問答管理刪除的問答會備份在這裡，可以還原或永久刪除。照片在永久刪除前都會保留。</p>
+      {notice && <p className="mb-4 rounded-lg bg-[#DFF2E7] px-4 py-2.5 text-sm font-bold text-[#17613E]">{notice}</p>}
+      <ErrorBar messages={[error]} />
+      <Table head={["類型", "客人問", "分類", "照片", "刪除時間", "刪除者", ""]}>
+        {(items ?? []).map((t) => (
+          <tr key={t.id} className="hover:bg-[#FAFBF8]">
+            <Td className="whitespace-nowrap">
+              <span className="rounded-full bg-[#E6F2EB] px-2 py-0.5 text-xs font-bold text-leaf">問答管理</span>
+            </Td>
+            <Td className="font-bold">{t.q || "—"}</Td>
+            <Td className="whitespace-nowrap">{t.catGone ? <span className="text-[#B3261E]">（分類已刪除）</span> : t.catName}</Td>
+            <Td className="whitespace-nowrap text-mute">{t.photos ? `${t.photos} 張` : "—"}</Td>
+            <Td className="whitespace-nowrap text-mute">{fmtTime(t.deletedAt)}</Td>
+            <Td className="whitespace-nowrap text-mute">{t.deletedBy || "—"}</Td>
+            <Td className="whitespace-nowrap text-right">
+              <button type="button" className={smallBtn()} onClick={() => setViewing(t)}>
+                <Icon name="eye" size={14} /> 檢視
+              </button>
+              <button type="button" className={`${smallBtn()} text-leaf`} onClick={() => act(t, "POST")}>
+                <Icon name="undo" size={14} /> 還原
+              </button>
+              <button type="button" className={smallBtn("danger")} onClick={() => act(t, "DELETE")} aria-label={`永久刪除 ${t.q}`}>
+                <Icon name="trash" size={14} />
+              </button>
+            </Td>
+          </tr>
+        ))}
+        {!items?.length && (
+          <tr>
+            <Td colSpan={7} className="py-8 text-center text-mute">
+              {items === null && !error ? "載入中…" : "沒有已刪除的紀錄"}
+            </Td>
+          </tr>
+        )}
+      </Table>
+
+      {viewing && (
+        <Modal
+          wide
+          onClose={() => setViewing(null)}
+          title={`已刪除：${viewing.q}`}
+          footer={
+            <>
+              <button type="button" className={`${dangerBtn} mr-auto`} onClick={() => act(viewing, "DELETE")}>
+                <Icon name="trash" size={15} /> 永久刪除
+              </button>
+              <button type="button" className={btn()} onClick={() => setViewing(null)}>
+                關閉
+              </button>
+              <button type="button" className={btn("pri")} onClick={() => act(viewing, "POST")}>
+                <Icon name="undo" size={15} /> 還原
+              </button>
+            </>
+          }
+        >
+          <dl className="mb-4 grid grid-cols-[72px_1fr] gap-x-3 gap-y-1.5 text-sm">
+            <dt className="text-mute">分類</dt>
+            <dd>{viewing.catGone ? "（分類已刪除，還原時放到第一個分類）" : viewing.catName}</dd>
+            <dt className="text-mute">回答</dt>
+            <dd className="whitespace-pre-wrap">{viewing.answer || "—"}</dd>
+            <dt className="text-mute">照片</dt>
+            <dd>{viewing.photos ? `${viewing.photos} 張` : "—"}</dd>
+          </dl>
+          <details>
+            <summary className="cursor-pointer text-sm text-mute">原始資料</summary>
+            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-white p-4 font-mono text-xs ring-1 ring-line">{JSON.stringify(viewing.data, null, 2)}</pre>
+          </details>
+        </Modal>
+      )}
+      {gate.dialog}
+    </>
+  );
+}
+
 /* ---------------- AI 版本 ---------------- */
 function AiTab() {
   const [data, setData] = useState<AiStatus | null>(null);
   const [error, setError] = useState("");
+  const [draft, setDraft] = useState<AiChoice | null>(null);
+  const [saved, setSaved] = useState("");
+  const gate = useCodeGate();
   useEffect(() => {
     call<AiStatus>("/api/admin/system/ai").then(setData, (e) => setError(errMsg(e)));
   }, []);
   if (error) return <ErrorBar messages={[`讀取失敗：${error}`]} />;
   if (!data) return <p className="text-sm text-mute">載入中…</p>;
 
+  const cur = draft ?? data.choice;
+  const changed = cur.primary !== data.choice.primary || cur.fallback !== data.choice.fallback;
   const week = data.days.slice(0, 7);
   const total = (d: AiStatus["days"][number]) => d.counts.reduce((s, c) => s + c.n, 0);
+  const options = (other: string) =>
+    AI_MODELS.map((m) => {
+      const noKey = !data.keys[m.provider];
+      return (
+        <option key={m.id} value={m.id} disabled={noKey || m.id === other}>
+          {m.label}（{noKey ? `主機沒有${KEY_LABEL[m.provider]}` : m.id === other ? "已選為另一個" : m.note}）
+        </option>
+      );
+    });
+
+  const save = () =>
+    gate.ask({
+      title: "更換 AI 版本",
+      confirmLabel: "測試並儲存",
+      message: (
+        <>
+          主版本改為 <b>{modelLabel(cur.primary)}</b>、備援改為 <b>{modelLabel(cur.fallback)}</b>。會先實際測試兩個版本都能回答才儲存，儲存後立即生效。
+        </>
+      ),
+      submit: async (code) => {
+        try {
+          setData(await call<AiStatus>("/api/admin/system/ai", { method: "PUT", json: cur, code }));
+          setDraft(null);
+          setSaved("已更換，下一則客人訊息開始使用新的版本。");
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: errMsg(e) };
+        }
+      },
+    });
+
   return (
     <div className="flex flex-col gap-5">
+      <Card title="更換版本">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="主版本（每次先用這個回答）">
+            <select value={cur.primary} onChange={(e) => (setSaved(""), setDraft({ ...cur, primary: e.target.value }))} className={inputCls}>
+              {options(cur.fallback)}
+            </select>
+          </Field>
+          <Field label="備援（主版本失敗或太慢時改用）">
+            <select value={cur.fallback} onChange={(e) => (setSaved(""), setDraft({ ...cur, fallback: e.target.value }))} className={inputCls}>
+              {options(cur.primary)}
+            </select>
+          </Field>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-mute">
+            需要驗證碼；儲存前會先測試，不能用的版本不會存。
+            {data.updated && `上次更換：${fmtTime(data.updated.at)}${data.updated.by ? `（${data.updated.by}）` : ""}`}
+          </p>
+          <div className="flex gap-2">
+            <button type="button" className={btn()} disabled={!changed} onClick={() => setDraft(null)}>
+              取消變更
+            </button>
+            <button type="button" className={btn("pri")} disabled={!changed} onClick={save}>
+              儲存版本
+            </button>
+          </div>
+        </div>
+        {saved && <p className="mt-3 rounded-lg bg-[#DFF2E7] px-3 py-2 text-sm font-bold text-[#17613E]">{saved}</p>}
+      </Card>
+
       <Card title="目前使用的 AI 版本">
-        <p className="mb-4 text-sm text-mute">機器人每次都先用主版本回答；主版本出錯或太久沒回應，才依序改用備援。</p>
+        <p className="mb-4 text-sm text-mute">機器人每次都先用主版本回答；主版本出錯或太久沒回應，才依序改用備援。備援也失敗時，最後再試 Gemini 3.5 Flash Lite。</p>
         <div className="grid gap-3 md:grid-cols-3">
-          {data.models.map((m, i) => (
+          {data.chain.map((m, i) => (
             <div key={m.id} className={`rounded-xl p-4 ${i === 0 ? "border-2 border-leaf bg-[#EEF7F1]" : "border border-line bg-white"}`}>
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${i === 0 ? "bg-leaf text-white" : "bg-[#E4E8E1] text-ink2"}`}>{m.role}</span>
                 <span className="text-xs text-mute">{m.provider}</span>
               </div>
               <div className="text-lg font-bold">{m.label}</div>
-              <div className="font-mono text-xs text-mute">{m.id}</div>
-              <div className={`mt-2 text-xs font-bold ${m.keySet ? "text-[#17613E]" : "text-[#B3261E]"}`}>{m.keySet ? "● 金鑰已設定" : `● 沒有設定 ${m.keyEnv}`}</div>
+              <div className="text-xs text-mute">
+                版本代號：<span className="font-mono">{m.id}</span>
+              </div>
+              <div className={`mt-2 text-xs font-bold ${m.keySet ? "text-[#17613E]" : "text-[#B3261E]"}`}>{m.keySet ? `● ${m.keyEnv}已設定` : `● 主機沒有${m.keyEnv}`}</div>
             </div>
           ))}
         </div>
@@ -144,6 +331,7 @@ function AiTab() {
         </Table>
         <p className="mt-3 text-xs text-mute">次數包含客人訊息與問答管理的「試問」。「改用備援」次數多，代表主版本不穩定。</p>
       </Card>
+      {gate.dialog}
     </div>
   );
 }
