@@ -3,6 +3,8 @@
 // 3.6-flash 偶爾 503 high demand 或一直沒回應，失敗時改用 3.5-flash-lite
 const PRIMARY = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 const FALLBACK = "gemini-3.5-flash-lite";
+export const GEMINI_MODELS = [PRIMARY, FALLBACK];
+export const geminiEnabled = () => !!process.env.GEMINI_API_KEY;
 /** 主力模型失敗後，這段時間內直接用備用模型（不再每次等它逾時） */
 const PRIMARY_COOLDOWN = 5 * 60_000;
 let primaryDownUntil = 0;
@@ -22,7 +24,7 @@ export interface FunctionDecl {
 }
 export type ToolHandler = (args: Record<string, unknown>) => Promise<object>;
 
-async function generate(system: string, contents: Content[], tools: FunctionDecl[], deadline: number, afterTools: boolean) {
+async function generate(system: string, contents: Content[], tools: FunctionDecl[], deadline: number, afterTools: boolean, used: { model?: string }) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("請設定 GEMINI_API_KEY");
   let lastError = "";
@@ -56,6 +58,7 @@ async function generate(system: string, contents: Content[], tools: FunctionDecl
         if (res.status === 429 || res.status >= 500) markDown();
         continue;
       }
+      used.model = model;
       const content = data?.candidates?.[0]?.content as Content | undefined;
       if (!content?.parts?.length) {
         // 已經呼叫過函式（例如只傳照片），模型正常結束、不再打字 → 沒有文字也算完成
@@ -74,11 +77,19 @@ async function generate(system: string, contents: Content[], tools: FunctionDecl
 }
 
 /** 跑一輪對話：模型要呼叫函式就執行後把結果交回，最多 5 回合；回傳最後的文字 */
-export async function chat(system: string, contents: Content[], tools: FunctionDecl[], handlers: Record<string, ToolHandler>, budget = CHAT_BUDGET) {
+export async function chat(
+  system: string,
+  contents: Content[],
+  tools: FunctionDecl[],
+  handlers: Record<string, ToolHandler>,
+  budget = CHAT_BUDGET,
+  /** 回傳實際回答的模型（主力或備用） */
+  used: { model?: string } = {},
+) {
   const convo = [...contents];
   const deadline = Date.now() + Math.min(budget, CHAT_BUDGET);
   for (let round = 0; round < 5; round++) {
-    const out = await generate(system, convo, tools, deadline, round > 0);
+    const out = await generate(system, convo, tools, deadline, round > 0, used);
     if (!out.parts.length) return "";
     convo.push(out);
     const calls = out.parts.filter((p) => p.functionCall);

@@ -6,9 +6,10 @@ import { call, Card, dangerBtn, errMsg, Field, inputCls, Modal, PageHeader, smal
 import { useMe } from "../_ui/me";
 import { btn, card, ErrorBar } from "../_ui/ui";
 import { USER_PAGES, type PageAccessSettings, type PageKey } from "@/lib/page-access";
+import type { AiStatus } from "@/lib/ai";
 
-type Tab = "users" | "access" | "data";
-const TABS: Tab[] = ["users", "access", "data"];
+type Tab = "ai" | "users" | "access" | "data";
+const TABS: Tab[] = ["ai", "users", "access", "data"];
 
 /* ---------------- 目前分頁，記在這台電腦的瀏覽器（重新整理後保留） ---------------- */
 const TAB_KEY = "chou-line-admin-tab";
@@ -54,18 +55,19 @@ export default function SystemPage() {
   }
   return (
     <main className="px-4 pb-10 pt-5 md:px-8 md:pt-7">
-      <PageHeader title="後台管理" desc="管理登入帳號與一般使用者可以看的頁面，以及檢視、刪除資料庫裡的所有資料。只有管理者看得到這一頁。" />
+      <PageHeader title="後台管理" desc="查看機器人使用的 AI 版本、管理登入帳號與一般使用者可以看的頁面，以及檢視、刪除資料庫裡的所有資料。只有管理者看得到這一頁。" />
       <UnlockPanel />
       <Tabs<Tab>
         value={tab}
         onChange={setTab}
         tabs={[
+          { value: "ai", label: "AI版本" },
           { value: "users", label: "使用者管理" },
           { value: "access", label: "頁面權限" },
           { value: "data", label: "所有資料" },
         ]}
       />
-      {tab === "users" ? <UsersTab /> : tab === "access" ? <AccessTab /> : <DataTab />}
+      {tab === "ai" ? <AiTab /> : tab === "users" ? <UsersTab /> : tab === "access" ? <AccessTab /> : <DataTab />}
     </main>
   );
 }
@@ -81,6 +83,70 @@ async function verifyCode(code: string): Promise<CodeResult> {
 }
 
 const fmtTime = (s: string | null) => (s ? new Date(s).toLocaleString("zh-TW", { hour12: false, timeZone: "Asia/Taipei" }) : "—");
+
+/* ---------------- AI 版本 ---------------- */
+function AiTab() {
+  const [data, setData] = useState<AiStatus | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    call<AiStatus>("/api/admin/system/ai").then(setData, (e) => setError(errMsg(e)));
+  }, []);
+  if (error) return <ErrorBar messages={[`讀取失敗：${error}`]} />;
+  if (!data) return <p className="text-sm text-mute">載入中…</p>;
+
+  const week = data.days.slice(0, 7);
+  const total = (d: AiStatus["days"][number]) => d.counts.reduce((s, c) => s + c.n, 0);
+  return (
+    <div className="flex flex-col gap-5">
+      <Card title="目前使用的 AI 版本">
+        <p className="mb-4 text-sm text-mute">機器人每次都先用主版本回答；主版本出錯或太久沒回應，才依序改用備援。</p>
+        <div className="grid gap-3 md:grid-cols-3">
+          {data.models.map((m, i) => (
+            <div key={m.id} className={`rounded-xl p-4 ${i === 0 ? "border-2 border-leaf bg-[#EEF7F1]" : "border border-line bg-white"}`}>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${i === 0 ? "bg-leaf text-white" : "bg-[#E4E8E1] text-ink2"}`}>{m.role}</span>
+                <span className="text-xs text-mute">{m.provider}</span>
+              </div>
+              <div className="text-lg font-bold">{m.label}</div>
+              <div className="font-mono text-xs text-mute">{m.id}</div>
+              <div className={`mt-2 text-xs font-bold ${m.keySet ? "text-[#17613E]" : "text-[#B3261E]"}`}>{m.keySet ? "● 金鑰已設定" : `● 沒有設定 ${m.keyEnv}`}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card title="實際回答的版本">
+        {data.last ? (
+          <p className="mb-4 text-sm">
+            最近一次回答：<b>{data.last.label}</b>
+            <span className="text-mute">（{fmtTime(data.last.at)}）</span>
+            {data.last.fellBack && <span className="ml-2 rounded-full bg-[#FFF1DC] px-2 py-0.5 text-xs font-bold text-[#8A4B00]">主版本失敗，改用備援</span>}
+          </p>
+        ) : (
+          <p className="mb-4 text-sm text-mute">還沒有紀錄（從這次更新之後開始記錄）。</p>
+        )}
+        <Table head={["日期", "回答次數", "各版本", "改用備援"]}>
+          {week.map((d) => (
+            <tr key={d.date}>
+              <Td className="whitespace-nowrap">{d.date}</Td>
+              <Td className="tabular-nums">{total(d)}</Td>
+              <Td>{d.counts.map((c) => `${c.label} ${c.n}`).join("、")}</Td>
+              <Td className={`tabular-nums ${d.fallback ? "font-bold text-[#8A4B00]" : "text-mute"}`}>{d.fallback}</Td>
+            </tr>
+          ))}
+          {!week.length && (
+            <tr>
+              <Td colSpan={4} className="py-6 text-center text-mute">
+                還沒有紀錄
+              </Td>
+            </tr>
+          )}
+        </Table>
+        <p className="mt-3 text-xs text-mute">次數包含客人訊息與問答管理的「試問」。「改用備援」次數多，代表主版本不穩定。</p>
+      </Card>
+    </div>
+  );
+}
 
 /* ---------------- 使用者管理 ---------------- */
 type User = {

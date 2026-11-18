@@ -3,7 +3,8 @@ import type { Content, FunctionDecl, ToolHandler } from "./gemini";
 
 /* Claude 對話＋函式呼叫（主力模型；失敗時 ai.ts 會改用 Gemini） */
 
-const MODEL = process.env.CLAUDE_MODEL || "claude-haiku-5-5";
+export const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-haiku-5-5";
+const MODEL = CLAUDE_MODEL;
 /** 一整輪對話（含呼叫函式）最多花的時間：LINE webhook 函式上限 60 秒，要留時間回覆客人 */
 const CHAT_BUDGET = 45_000;
 const MAX_ROUNDS = 6;
