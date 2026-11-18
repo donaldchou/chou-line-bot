@@ -7,7 +7,8 @@ export type Sys = "kaki" | "peach";
 export const SYSTEMS: Sys[] = ["kaki", "peach"];
 
 // LL3_HOST 只在本機測試時設定（指向 ASP 測試環境），正式環境不用設
-const HOST = (process.env.LL3_HOST || "http://www.ll3.com.tw").replace(/\/$/, "");
+// 要用 https：http 會被 301 轉到 https，POST 轉址後變成 GET、表單資料會不見（試算／下單都會失敗）
+const HOST = (process.env.LL3_HOST || "https://www.ll3.com.tw").replace(/\/$/, "");
 export const SYS_INFO: Record<Sys, { label: string; dir: string }> = {
   kaki: { label: "甜柿", dir: "kaki_order" },
   peach: { label: "水蜜桃", dir: "order" },
