@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import type { CatView, QaPageData, QaView, UnansweredView } from "@/lib/qa";
 import type { PreviewPhotos } from "@/lib/qa-answer";
 import { Icon } from "../_ui/icons";
-import { call, errMsg, Field, inputCls, Modal, PageHeader, smallBtn, Tabs, UnlockPanel, useCodeGate, type CodeResult } from "../_ui/kit";
+import { call, errMsg, Field, inputCls, Modal, PageHeader, smallBtn, Tabs, UnlockTimer, useCodeGate, type CodeResult } from "../_ui/kit";
 import { useCanEdit } from "../_ui/me";
 import { ago, btn, card, ErrorBar, usePoll } from "../_ui/ui";
 
@@ -111,6 +111,7 @@ export default function QaPage() {
     <main className="px-4 pb-10 pt-5 md:px-8 md:pt-7">
       <PageHeader
         title="問答管理"
+        badge={<UnlockTimer />}
         desc="機器人回答客人時會參考這裡的問答，存檔後立刻生效。價格、運費、手續費、能不能訂由系統自動處理，不在這裡改。"
       >
         {canEdit && (
@@ -119,7 +120,6 @@ export default function QaPage() {
           </button>
         )}
       </PageHeader>
-      {canEdit && <UnlockPanel />}
       <ErrorBar messages={[error, err]} />
       {msg && (
         <div role="status" className="mb-4 rounded-xl border border-[#B7DEC6] bg-[#EEF7F1] px-4 py-3 text-sm text-[#17613E]">

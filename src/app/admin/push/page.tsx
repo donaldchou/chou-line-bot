@@ -5,7 +5,7 @@ import type { BroadcastPageData } from "@/lib/broadcast";
 import type { CustomersData } from "@/lib/admin-data";
 import { SEGMENTS } from "@/lib/segments";
 import { Icon } from "../_ui/icons";
-import { call, errMsg, inputCls, PageHeader, useCodeGate } from "../_ui/kit";
+import { call, errMsg, inputCls, PageHeader, UnlockTimer, useCodeGate } from "../_ui/kit";
 import { useCanEdit } from "../_ui/me";
 import { btn, card, ErrorBar, mdhm, SYS_LABEL, usePoll } from "../_ui/ui";
 
@@ -106,7 +106,7 @@ export default function PushPage() {
 
   return (
     <main className="px-4 pb-10 pt-5 md:px-8 md:pt-7">
-      <PageHeader title="群發訊息" desc={`開季通知、回購提醒：選分群 → 寫訊息 → 確認人數與則數 → 送出。${d?.gapDays ?? 7} 天內收過群發的客人會自動排除，避免打擾。`} />
+      <PageHeader title="群發訊息" badge={<UnlockTimer />} desc={`開季通知、回購提醒：選分群 → 寫訊息 → 確認人數與則數 → 送出。${d?.gapDays ?? 7} 天內收過群發的客人會自動排除，避免打擾。`} />
       <ErrorBar messages={[error]} />
       {msg && (
         <p role="status" className={`mb-4 rounded-xl px-4 py-3 text-sm ${msg.ok ? "bg-[#DFF2E7] text-[#17613E]" : "bg-[#FDECEA] text-[#9E2A1C]"}`}>

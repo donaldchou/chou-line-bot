@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons";
-import { isUnlocked, lock, unlock, useUnlock } from "./me";
+import { isUnlocked, lock, unlock, useCanEdit, useUnlock } from "./me";
 import { btn, card } from "./ui";
 
 /* 後台管理用的元件（照 chou-platform 的 Modal / Tabs / Table / 驗證碼對話框 / 解鎖區塊） */
@@ -33,11 +34,14 @@ export async function call<T>(url: string, init?: RequestInit & { code?: string;
   return data as T;
 }
 
-export function PageHeader({ title, desc, children }: { title: string; desc?: string; children?: ReactNode }) {
+export function PageHeader({ title, desc, badge, children }: { title: string; desc?: string; badge?: ReactNode; children?: ReactNode }) {
   return (
     <header className="mb-5 flex flex-wrap items-end gap-3">
       <div className="mr-auto flex flex-col gap-1">
-        <h1 className="text-[26px] font-bold">{title}</h1>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <h1 className="text-[26px] font-bold">{title}</h1>
+          {badge}
+        </div>
         {desc && <p className="max-w-3xl text-sm text-mute">{desc}</p>}
       </div>
       {children}
@@ -286,6 +290,34 @@ export const mmss = (s: number) => {
   const h = Math.floor(s / 3600);
   return `${h ? `${h}:` : ""}${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 };
+
+/** 頁面標題後面的小提示（同 chou-platform）：解鎖中顯示倒數，沒解鎖時提示到後台管理解鎖 */
+export function UnlockTimer() {
+  const canEdit = useCanEdit();
+  const until = useUnlock();
+  const left = useRemaining(until);
+  if (!canEdit) return null;
+  if (until && left > 0) {
+    return (
+      <div className="inline-flex items-center gap-2 rounded-full bg-[#EEF7F1] px-3 py-1 text-sm text-[#17613E] ring-1 ring-[#B7DEC6]">
+        <Icon name="lockOpen" size={15} />
+        驗證碼已解鎖，<b className="tabular-nums">{mmss(left)}</b> 後失效
+        <button type="button" onClick={() => void lock()} className="ml-1 text-xs text-leaf underline">
+          立即鎖定
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full bg-[#ECEEE8] px-3 py-1 text-sm text-ink2">
+      <Icon name="lock" size={15} />
+      新增／修改／刪除需輸入驗證碼
+      <Link href="/admin/system" className="text-xs text-leaf underline">
+        到後台解鎖
+      </Link>
+    </div>
+  );
+}
 
 const HOURS_MIN = 1;
 const HOURS_MAX = 12;
