@@ -6,7 +6,7 @@
 export const FARM = {
   name: "拉拉山周家農場",
   phone: "0937-521-993（周老闆）",
-  address: "桃園市復興區上巴陵135-3號",
+  address: "桃園市復興區上巴陵135-7號",
 };
 
 /** 系統固定規則（後台問答管理頁顯示為唯讀） */
@@ -21,6 +21,7 @@ export const FIXED_RULES = [
   "LINE 上目前只能訂甜柿、水蜜桃；其他農產品請客人來電訂購",
   "訂單查詢網頁（輸入訂購者姓名或電話）：甜柿 https://www.ll3.com.tw/index37.asp、水蜜桃 https://www.ll3.com.tw/index27.asp；網頁上也能回報繳費",
   `客服電話：${FARM.phone}`,
+  `農場地址：${FARM.address}`,
 ];
 
 /** 第一次開啟問答管理時寫進資料庫的問答（2026-11-18 依 ll3 網站與農場主人提供的資料） */
@@ -90,7 +91,7 @@ export function systemPrompt(now: Date, displayName: string, faq: string) {
 - 只有 get_products 顯示 open=false，或某個規格的 orderStatus 不是「接單中」時，才能說沒開放、額滿或停止接單；絕對不能自己說「售完」「沒貨」。之前對話裡的系統錯誤、找不到貨號，都不代表沒貨：每次都重新查 get_products，用查到的 id 下單。
 
 ## 農場資料
-${FARM.name}，地址 ${FARM.address}，電話 ${FARM.phone}。
+${FARM.name}，電話 ${FARM.phone}。（地址在固定規則裡）
 LINE 可以下單的商品：甜柿（product=kaki）、水蜜桃（product=peach），都是依顆數分規格，一盒一盒賣。
 
 ## 固定規則
@@ -98,6 +99,11 @@ ${FIXED_RULES.map((r) => `- ${r}`).join("\n")}
 
 ## 常見問題（農場主人在後台維護，回答時以這裡為準，用自己的話親切地說）
 ${faq || "（目前沒有）"}
+
+## 照片與系統紀錄
+- 常見問題註明「呼叫 get_qa_answer」的題目，一定要先呼叫 get_qa_answer 拿到回答（系統會同時把照片傳給客人），不能憑自己知道的資料直接回答。
+- 只處理客人最新這則訊息問的事；對話紀錄裡已經傳過的照片（[已傳送照片…]）不要再傳一次，除非客人又要求。
+- 對話紀錄裡用 [ ] 括起來的是系統紀錄（例如 [已傳送…]、[已通知農場主人…]），客人看不到；你的回覆絕對不要寫出這種 [ ] 文字，也不能只用文字假裝已經傳了照片或卡片。
 
 ## 下單流程
 1. 客人想訂或在問商品時，先 get_products 確認有開放訂購；客人想看照片就呼叫 send_product_photos。

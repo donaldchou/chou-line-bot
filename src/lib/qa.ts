@@ -4,7 +4,7 @@ import { AdminSetting, AlertLog, LineUser, QaCategory, QaItem, type QaCategoryDo
 import { SEED_CATEGORIES, SEED_QA } from "./knowledge";
 import { deletePhoto, PHOTO_NAME } from "./ll3-file";
 
-/** 試問時還沒存檔的那則問答，send_qa_photos 用這個 id */
+/** 試問時還沒存檔的那則問答，get_qa_answer 用這個 id */
 export const DRAFT_ID = "draft";
 
 /* 問答管理：機器人回答客人時參考的問答，存在資料庫，後台改了立刻生效 */
@@ -112,14 +112,9 @@ export async function qaPromptText(override?: { id?: string; draft: QaDraft }) {
       const body = rows
         .map((i) => {
           const lines = [`- 客人問：${i.q}${i.alt ? `（也可能這樣問：${i.alt}）` : ""}`];
-          if (i.a) lines.push(`  回答重點：${i.a}`);
-          if (sendsPhotos(i)) {
-            lines.push(
-              i.sendMode === "photo"
-                ? `  ※ 這題只傳照片：呼叫 send_qa_photos(qa_id="${i._id}")，這題不要再打字回答`
-                : `  ※ 回答這題時，同時呼叫 send_qa_photos(qa_id="${i._id}") 傳照片給客人參考`,
-            );
-          }
+          // 有照片的題目不直接給回答：AI 要呼叫 get_qa_answer 才拿得到回答，同時把照片傳出去（不靠 AI 記得另外傳照片）
+          if (sendsPhotos(i)) lines.push(`  ※ 這題的回答在系統裡：一定要先呼叫 get_qa_answer(qa_id="${i._id}")，照它回傳的內容回覆`);
+          else if (i.a) lines.push(`  回答重點：${i.a}`);
           if (i.notify) lines.push(`  ※ 回答這題後，同時呼叫 flag_customer(status="human", reason="客人問：${i.q}")`);
           return lines.join("\n");
         })

@@ -149,9 +149,16 @@ interface Turn {
   flagged: boolean;
   /** 這一輪工具遇到的系統錯誤（訂單系統連不上、試算失敗…） */
   toolErrors: string[];
-  /** 問答附的照片（send_qa_photos）：mode 決定跟文字的先後 */
-  qaPhotos: { mode: QaSendMode; msgs: LineMessage[] } | null;
+  /** 問答附的照片（get_qa_answer）：mode 決定跟文字的先後 */
+  qaPhotos: { mode: QaSendMode; msgs: LineMessage[]; ids: string[] } | null;
 }
+
+/** 機器人有時會模仿對話紀錄，自己寫出「[已傳送照片…]」這類系統紀錄：傳給客人前拿掉 */
+export const stripNotes = (text: string) =>
+  text
+    .replace(/^[ \t]*\[(已|訂單|寄出|系統)[^\]\n]*\][ \t]*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
 /** 問答照片的網址（LINE 和後台都經機器人讀 ll3） */
 export const qaPhotoUrl = (name: string) => `${baseUrl()}/api/qa-photo/${name}`;
@@ -198,8 +205,8 @@ export const TOOLS: FunctionDecl[] = [
     },
   },
   {
-    name: "send_qa_photos",
-    description: "傳常見問題附的照片（產品照片、價格照片）給客人。只有常見問題裡註明要呼叫的題目才用，qa_id 照抄。",
+    name: "get_qa_answer",
+    description: "取得常見問題的回答，並把那題附的照片傳給客人。常見問題裡註明要呼叫的題目一定要用，qa_id 照抄。",
     parameters: { type: "object", properties: { qa_id: { type: "string" } }, required: ["qa_id"] },
   },
   {
@@ -439,13 +446,28 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
       };
     },
 
-    async send_qa_photos(a) {
+    async get_qa_answer(a) {
       const i = await QaItem.findOne({ _id: str(a.qa_id), active: true }).lean<QaItemDoc>();
-      if (!i || !sendsPhotos(i)) return { error: "這題沒有照片" };
-      if (t.qaPhotos) return { ok: true, note: "這一輪已經傳過照片了，一次只能傳一題的照片" };
-      t.qaPhotos = { mode: i.sendMode, msgs: qaPhotoMessages(i) };
+      if (!i) return { error: "沒有這題" };
+      const answer = { answer: i.a || "（這題沒有文字回答）" };
+      if (!sendsPhotos(i)) return answer;
+      const skip = (why: string) => ({ ...answer, photos: why });
+      // 一則訊息問了兩件事時可以傳兩題的照片；同一題不重複，最多 2 題
+      if (t.qaPhotos?.ids.includes(i._id)) return skip("這題的照片已經傳了");
+      // 最近幾則已經傳過這題的照片就不再傳（AI 有時會把前面的問題再處理一次）；客人明說要再看一次才重傳
+      const recent = await ChatMessage.find({ userId: t.user._id, role: "model" }, { text: 1 }).sort({ at: -1 }).limit(3).lean();
+      const again = /再(傳|給|看|發)|重(新)?傳|沒(收到|看到)/.test(t.text);
+      if (!again && recent.some((m) => m.text.includes(`（問答：${i.q}）]`))) return skip("這題的照片剛剛已經傳過，這次不再傳，也不要說又傳了一次");
+      if ((t.qaPhotos?.ids.length ?? 0) >= 2) return skip("這一輪已經傳了兩題的照片，這題的照片請客人再問");
+      t.qaPhotos = {
+        mode: t.qaPhotos?.mode ?? i.sendMode,
+        msgs: [...(t.qaPhotos?.msgs ?? []), ...qaPhotoMessages(i)],
+        ids: [...(t.qaPhotos?.ids ?? []), i._id],
+      };
       t.notes.push(`[已傳送照片：${photoSummary(i)}（問答：${i.q}）]`);
-      return { ok: true, note: i.sendMode === "photo" ? "照片已傳，這題不要再打字回答" : "照片會跟你的回答一起傳給客人" };
+      return i.sendMode === "photo"
+        ? { photos: "已傳照片給客人；這題只傳照片，不要再打字回答這題" }
+        : { ...answer, photos: `${photoSummary(i)}會${i.sendMode === "photo_text" ? "在你的回覆前面先傳給客人" : "附在你的回覆後面"}，可以簡短提一下有附照片` };
     },
 
     async set_quick_replies(a) {
@@ -496,6 +518,7 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
     failed = e instanceof Error ? e.message : String(e);
     answer = sentSomething() ? "" : SORRY;
   }
+  answer = stripNotes(answer);
   if (!answer && !sentSomething()) answer = SORRY;
 
   // 保險：機器人跟客人說「已請老闆處理」，或系統出錯沒回答到，但沒有呼叫 flag_customer → 一定要通知農場

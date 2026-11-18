@@ -1,7 +1,7 @@
 import { connectDB } from "./mongodb";
 import { AlertLog, LineUser, QaItem, type LineUserDoc, type QaItemDoc } from "./models";
 import { chat, type ToolHandler } from "./gemini";
-import { qaPhotoMessages, TOOLS } from "./bot";
+import { qaPhotoMessages, stripNotes, TOOLS } from "./bot";
 import { systemPrompt } from "./knowledge";
 import { getProducts, isSys, SYS_INFO } from "./ll3";
 import { push, textMsg, type LineMessage } from "./line";
@@ -10,7 +10,7 @@ import { DRAFT_ID, photoSummary, QaError, qaPromptText, sendsPhotos, type QaDraf
 
 /* 問答管理的「先試問機器人」與「存檔後回覆客人」：用 Gemini 產生回覆，但不寫任何客戶資料 */
 
-const PREVIEW_TOOLS = ["get_products", "flag_customer", "set_quick_replies", "send_qa_photos"];
+const PREVIEW_TOOLS = ["get_products", "flag_customer", "set_quick_replies", "get_qa_answer"];
 
 /** 試問結果裡機器人會傳的照片 */
 export type PreviewPhotos = Pick<QaDraft, "productPhotos" | "pricePhotos" | "sendMode">;
@@ -35,13 +35,17 @@ export async function previewAnswer(question: string, faq: string, opts: { name?
   const notes: string[] = [];
   let photos: PreviewPhotos | null = null;
   const handlers: Record<string, ToolHandler> = {
-    async send_qa_photos(a) {
+    async get_qa_answer(a) {
       const id = String(a.qa_id ?? "");
-      const i: PreviewPhotos | null =
+      const i: (PreviewPhotos & { a: string }) | null =
         id === DRAFT_ID && opts.draft ? opts.draft : await QaItem.findOne({ _id: id, active: true }).lean<QaItemDoc>();
-      if (!i || !sendsPhotos(i)) return { error: "這題沒有照片" };
-      photos = { productPhotos: i.productPhotos ?? [], pricePhotos: i.pricePhotos ?? [], sendMode: i.sendMode };
-      return { ok: true, note: i.sendMode === "photo" ? "照片已傳，這題不要再打字回答" : "照片會跟你的回答一起傳給客人" };
+      if (!i) return { error: "沒有這題" };
+      const answer = { answer: i.a || "（這題沒有文字回答）" };
+      if (!sendsPhotos(i)) return answer;
+      if (!photos) photos = { productPhotos: i.productPhotos ?? [], pricePhotos: i.pricePhotos ?? [], sendMode: i.sendMode };
+      return i.sendMode === "photo"
+        ? { photos: "已傳照片給客人；這題只傳照片，不要再打字回答這題" }
+        : { ...answer, photos: `照片會${i.sendMode === "photo_text" ? "在你的回覆前面先傳給客人" : "附在你的回覆後面"}，可以簡短提一下有附照片` };
     },
     async get_products(a) {
       if (!isSys(a.product)) return { error: "product 要是 kaki 或 peach" };
@@ -68,7 +72,7 @@ export async function previewAnswer(question: string, faq: string, opts: { name?
     TOOLS.filter((t) => PREVIEW_TOOLS.includes(t.name)),
     handlers,
   );
-  return { text, notes, photos: photos as PreviewPhotos | null };
+  return { text: stripNotes(text), notes, photos: photos as PreviewPhotos | null };
 }
 
 /** 加入問答後，用新的問答回覆當初問這題的客人（text：試問時看過的那段；沒有就重新產生） */
