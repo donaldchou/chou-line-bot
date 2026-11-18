@@ -1,7 +1,13 @@
 /* Gemini 對話＋函式呼叫（REST v1beta） */
 
-// 3.6-flash 偶爾 503 high demand，失敗時改用 3.5-flash-lite
-const MODELS = [process.env.GEMINI_MODEL || "gemini-3.6-flash", "gemini-3.5-flash-lite"];
+// 3.6-flash 偶爾 503 high demand 或一直沒回應，失敗時改用 3.5-flash-lite
+const PRIMARY = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+const FALLBACK = "gemini-3.5-flash-lite";
+/** 主力模型失敗後，這段時間內直接用備用模型（不再每次等它逾時） */
+const PRIMARY_COOLDOWN = 5 * 60_000;
+let primaryDownUntil = 0;
+/** 一整輪對話（含呼叫函式）最多花的時間：LINE webhook 函式上限 60 秒，要留時間回覆客人 */
+const CHAT_BUDGET = 45_000;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Part = Record<string, any>;
@@ -16,11 +22,22 @@ export interface FunctionDecl {
 }
 export type ToolHandler = (args: Record<string, unknown>) => Promise<object>;
 
-async function generate(system: string, contents: Content[], tools: FunctionDecl[]) {
+async function generate(system: string, contents: Content[], tools: FunctionDecl[], deadline: number) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("請設定 GEMINI_API_KEY");
   let lastError = "";
-  for (const model of MODELS) {
+  const models = Date.now() < primaryDownUntil ? [FALLBACK] : [PRIMARY, FALLBACK];
+  for (const model of models) {
+    const left = deadline - Date.now();
+    if (left < 3_000) {
+      lastError ||= "時間不夠";
+      break;
+    }
+    // 主力模型最多等 15 秒，留時間給備用模型
+    const timeout = Math.min(left, model === PRIMARY && models.length > 1 ? 15_000 : 25_000);
+    const markDown = () => {
+      if (model === PRIMARY) primaryDownUntil = Date.now() + PRIMARY_COOLDOWN;
+    };
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST",
@@ -31,21 +48,24 @@ async function generate(system: string, contents: Content[], tools: FunctionDecl
           tools: [{ functionDeclarations: tools }],
           generationConfig: { temperature: 0.4 },
         }),
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(timeout),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        lastError = data?.error?.message ?? `HTTP ${res.status}`;
+        lastError = `${model}: ${data?.error?.message ?? `HTTP ${res.status}`}`;
+        if (res.status === 429 || res.status >= 500) markDown();
         continue;
       }
       const content = data?.candidates?.[0]?.content as Content | undefined;
       if (!content?.parts?.length) {
-        lastError = `empty response (${data?.candidates?.[0]?.finishReason ?? "?"})`;
+        lastError = `${model}: empty response (${data?.candidates?.[0]?.finishReason ?? "?"})`;
         continue;
       }
       return { ...content, role: "model" as const };
     } catch (e) {
-      lastError = e instanceof Error ? e.message : String(e);
+      // 逾時或連線失敗
+      lastError = `${model}: ${e instanceof Error ? e.message : String(e)}`;
+      markDown();
     }
   }
   throw new Error(`Gemini 失敗：${lastError}`);
@@ -54,8 +74,9 @@ async function generate(system: string, contents: Content[], tools: FunctionDecl
 /** 跑一輪對話：模型要呼叫函式就執行後把結果交回，最多 5 回合；回傳最後的文字 */
 export async function chat(system: string, contents: Content[], tools: FunctionDecl[], handlers: Record<string, ToolHandler>) {
   const convo = [...contents];
+  const deadline = Date.now() + CHAT_BUDGET;
   for (let round = 0; round < 5; round++) {
-    const out = await generate(system, convo, tools);
+    const out = await generate(system, convo, tools, deadline);
     convo.push(out);
     const calls = out.parts.filter((p) => p.functionCall);
     if (!calls.length) {

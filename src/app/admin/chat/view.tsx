@@ -156,11 +156,7 @@ function Detail({ id }: { id: string }) {
               <path d="M15 5l-7 7 7 7" />
             </svg>
           </Link>
-          <Avatar id={r.id} name={r.name} picture={r.picture} />
-          <div className="mr-auto flex min-w-0 flex-col">
-            <b className="truncate text-base">{r.name}</b>
-            <span className="text-xs text-mute">LINE 好友 · {mdhm(d.createdAt)} 加入</span>
-          </div>
+          {/* 左邊：機器人狀態（機器人訊息在左）；右邊：客人（客人訊息在右） */}
           {r.paused ? (
             <>
               <span className="inline-flex items-center gap-1.5 text-[13px] font-bold text-[#8A4B00]">
@@ -189,6 +185,13 @@ function Detail({ id }: { id: string }) {
           <button type="button" className={`${btn()} xl:hidden`} onClick={() => setTab("info")}>
             資料與訂單
           </button>
+          <div className="ml-auto flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 flex-col items-end text-right">
+              <b className="max-w-full truncate text-base">{r.name}</b>
+              <span className="text-xs text-mute">LINE 好友 · {mdhm(d.createdAt)} 加入</span>
+            </div>
+            <Avatar id={r.id} name={r.name} picture={r.picture} />
+          </div>
         </header>
         <MobileProgress d={d} onInfo={() => setTab("info")} />
         <Messages d={d} />
@@ -233,7 +236,8 @@ function Messages({ d }: { d: CustomerDetail }) {
         const lines = m.text.split("\n");
         const text = lines.filter((l) => !isNote(l)).join("\n").trim();
         const notes = lines.filter(isNote).map((l) => l.trim().slice(1, -1));
-        const mine = m.role === "model";
+        // 客人在右邊、機器人／農場在左邊
+        const mine = m.role === "user";
         const who = m.role === "user" ? "客人" : m.by === "admin" ? "農場" : "機器人";
         const newDay = i === 0 || !sameDay(d.messages[i - 1].at, m.at);
         return (
@@ -246,7 +250,7 @@ function Messages({ d }: { d: CustomerDetail }) {
                 </span>
                 <div
                   className={`whitespace-pre-wrap break-words px-3.5 py-2.5 text-sm leading-relaxed ${
-                    !mine ? "rounded-[4px_16px_16px_16px] bg-white" : m.by === "admin" ? "rounded-[16px_4px_16px_16px] bg-[#FFE7B8]" : "rounded-[16px_4px_16px_16px] bg-[#C9F2D9]"
+                    mine ? "rounded-[16px_4px_16px_16px] bg-white" : m.by === "admin" ? "rounded-[4px_16px_16px_16px] bg-[#FFE7B8]" : "rounded-[4px_16px_16px_16px] bg-[#C9F2D9]"
                   }`}
                 >
                   {text}

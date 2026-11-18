@@ -296,7 +296,7 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
       const list = r.products.filter((p) => !ids.length || ids.includes(p.id));
       if (!list.length) return { error: "沒有這些商品" };
       t.out.push(productCarousel(sys, list.map((p) => ({ p, img: productImg(sys, p.picture) }))));
-      t.notes.push(`[已傳送${SYS_INFO[sys].label}產品卡片：${list.map((p) => `${p.name} ${p.price}元`).join("、")}]`);
+      t.notes.push(`[已傳送${SYS_INFO[sys].label}產品卡片：${list.map((p) => `${p.name}（貨號 ${p.id}）${p.price}元`).join("、")}]`);
       await markInterest(t.user, sys);
       return { sent: list.length, open: r.open, closedMessage: r.open ? undefined : r.closedMsg };
     },
@@ -340,6 +340,22 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
 
       const p = await getProducts(sys);
       if (!p.open) return { error: `${SYS_INFO[sys].label}目前沒有開放訂購`, closedMessage: p.closedMsg };
+      // AI 有時會自己編貨號（例如 kaki-8）：用數字對回「8粒裝」，對不到就把正確貨號給它重試
+      const bad: string[] = [];
+      for (const it of items) {
+        if (p.products.some((x) => x.id === it.id)) continue;
+        const n = it.id.match(/\d+/)?.[0];
+        const hit = n ? p.products.filter((x) => x.name.includes(`${Number(n)}粒`)) : [];
+        if (hit.length === 1) it.id = hit[0].id;
+        else bad.push(it.id);
+      }
+      if (bad.length) {
+        return {
+          error: `貨品編號不對：${bad.join("、")}`,
+          products: p.products.map((x) => ({ id: x.id, name: x.name })),
+          note: "請用上面正確的 id 重新呼叫 prepare_order，不用跟客人提這件事",
+        };
+      }
       const cap = await checkCapacity(sys, items);
       if (!cap.ok) return { error: `${cap.product}${CAP_LABEL[cap.status]}，不能下單`, reply: cap.reply };
       let q;
