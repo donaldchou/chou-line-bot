@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { connectDB } from "./mongodb";
 import { AlertLog, ChatMessage, LineUser, OrderDraft, WebhookEvent, type LineUserDoc, type OrderInput } from "./models";
-import { botPaused, logMessage, setStage } from "./progress";
+import { botPaused, logMessage, previewText, setStage } from "./progress";
 import { getProfile, imageMsg, send, showLoading, textMsg, withQuickReply, type LineMessage, type QuickItem } from "./line";
 import { chat, type Content, type FunctionDecl, type ToolHandler } from "./gemini";
 import { systemPrompt, FARM } from "./knowledge";
@@ -134,7 +134,26 @@ interface Turn {
   out: LineMessage[];
   quick: QuickItem[];
   notes: string[];
+  /** 這一輪已經通知過農場（flag_customer unanswered／human） */
+  flagged: boolean;
+  /** 這一輪工具遇到的系統錯誤（訂單系統連不上、試算失敗…） */
+  toolErrors: string[];
 }
+
+/** 通知農場：客戶列表亮提醒＋留紀錄（總覽「機器人表現」、問答管理「答不出來的問題」用） */
+async function raiseAlert(t: Turn, kind: "unanswered" | "human", text: string) {
+  const at = new Date();
+  const msg = text.slice(0, 200);
+  await LineUser.updateOne({ _id: t.user._id }, { $set: { alert: { kind, text: msg, at } } });
+  // question＝客人原話
+  await AlertLog.create({ userId: t.user._id, kind, text: msg, question: t.text.slice(0, 500), at });
+  t.flagged = true;
+  t.notes.push(`[已通知農場主人：${msg}]`);
+}
+
+/** 機器人的回覆裡說了「已請老闆處理／會請農場主人回覆」這類話 */
+const PROMISED_HUMAN =
+  /(已|會|幫您|替您|為您)[^。！？\n]{0,8}(請|通知|轉達|告知|回報)[^。！？\n]{0,6}(老闆|農場主人|農場|真人|專人)|(老闆|農場主人|專人|真人)[^。！？\n]{0,6}(會|將)[^。！？\n]{0,6}(聯絡|聯繫|回覆|處理|協助)/;
 
 export const TOOLS: FunctionDecl[] = [
   {
@@ -225,7 +244,24 @@ const asSys = (v: unknown): Sys => {
   return v;
 };
 
+/** 工具丟出的例外（連不上訂單系統等）記下來，回覆後檢查要不要通知農場 */
 function handlers(t: Turn): Record<string, ToolHandler> {
+  return Object.fromEntries(
+    Object.entries(rawHandlers(t)).map(([name, h]) => [
+      name,
+      async (a: Record<string, unknown>) => {
+        try {
+          return await h(a);
+        } catch (e) {
+          t.toolErrors.push(`${name}：${e instanceof Error ? e.message : String(e)}`);
+          throw e;
+        }
+      },
+    ]),
+  );
+}
+
+function rawHandlers(t: Turn): Record<string, ToolHandler> {
   return {
     async get_products(a) {
       const sys = asSys(a.product);
@@ -310,7 +346,10 @@ function handlers(t: Turn): Record<string, ToolHandler> {
       try {
         q = await quote(sys, items, data.pay);
       } catch (e) {
-        if (e instanceof Ll3Error) return { error: e.message };
+        if (e instanceof Ll3Error) {
+          t.toolErrors.push(`試算金額失敗：${e.message}`);
+          return { error: e.message, note: "這是訂單系統的問題，不是客人的錯。請呼叫 flag_customer(status=\"human\") 通知農場主人，並請客人稍等或直接來電" };
+        }
         throw e;
       }
       // 之前還沒確認的訂單作廢，只留這一張
@@ -338,6 +377,7 @@ function handlers(t: Turn): Record<string, ToolHandler> {
           }
         }),
       );
+      t.toolErrors.push(...errors);
       found.sort((x, y) => (y.o.time ?? "").localeCompare(x.o.time ?? ""));
       if (found.length) t.out.push(orderCarousel(found));
       t.notes.push(`[查詢訂單 ${name} ${phone}：找到 ${found.length} 筆${found.length ? "，已傳送訂單卡片" : ""}]`);
@@ -366,13 +406,8 @@ function handlers(t: Turn): Record<string, ToolHandler> {
         return { ok: true };
       }
       if (a.status === "unanswered" || a.status === "human") {
-        const text = str(a.reason) || (a.status === "human" ? "客人想找真人" : "機器人答不出來");
-        const at = new Date();
-        await LineUser.updateOne({ _id: t.user._id }, { $set: { alert: { kind: a.status, text: text.slice(0, 200), at } } });
-        // 留紀錄：總覽的「機器人表現」用
-        // question＝客人原話：後台「問答管理」的「答不出來的問題」顯示用
-        await AlertLog.create({ userId: t.user._id, kind: a.status, text: text.slice(0, 200), question: t.text.slice(0, 500), at });
-        t.notes.push(`[已通知農場主人：${text}]`);
+        if (t.flagged) return { ok: true, note: "這一輪已經通知過農場主人了" };
+        await raiseAlert(t, a.status, str(a.reason) || (a.status === "human" ? "客人想找真人" : "機器人答不出來"));
         return { ok: true, note: "已通知農場主人，請告訴客人農場會再跟他聯絡，急的話可以直接打電話" };
       }
       return { error: "status 不對" };
@@ -395,16 +430,31 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   if (botPaused(user)) return;
   void showLoading(userId, 30);
 
-  const t: Turn = { user, text, out: [], quick: [], notes: [] };
+  const t: Turn = { user, text, out: [], quick: [], notes: [], flagged: false, toolErrors: [] };
   let answer = "";
+  let failed = "";
   try {
     const faq = await qaPromptText().catch((e) => (console.error("qaPromptText", e), ""));
     answer = await chat(systemPrompt(new Date(), user.displayName, faq), await history(userId), TOOLS, handlers(t));
   } catch (e) {
     console.error("chat", e);
+    failed = e instanceof Error ? e.message : String(e);
     answer = t.out.length ? "" : SORRY;
   }
   if (!answer && !t.out.length) answer = SORRY;
+
+  // 保險：機器人跟客人說「已請老闆處理」，或系統出錯沒回答到，但沒有呼叫 flag_customer → 一定要通知農場
+  if (!t.flagged) {
+    const why =
+      answer === SORRY
+        ? `機器人出錯，沒有回答到客人（${(failed || t.toolErrors[0] || "AI 沒有回覆").slice(0, 80)}）`
+        : PROMISED_HUMAN.test(answer)
+          ? t.toolErrors.length
+            ? `系統出錯，機器人已跟客人說會請你處理：${t.toolErrors[0]}`
+            : `機器人跟客人說會請你處理：「${previewText(answer).slice(0, 60)}」`
+          : "";
+    if (why) await raiseAlert(t, "human", why).catch((e) => console.error("raiseAlert", e));
+  }
 
   const msgs: LineMessage[] = [...(answer ? [textMsg(answer)] : []), ...t.out];
   msgs[msgs.length - 1] = withQuickReply(msgs[msgs.length - 1], t.quick);

@@ -112,6 +112,8 @@ ${faq || "（目前沒有）"}
 - 客人開始下單、但資料還沒給齊時，呼叫 flag_customer(status="filling", missing=還缺的項目)。
 - 你答不出來、資料裡沒有答案，呼叫 flag_customer(status="unanswered", reason=客人問什麼)，並告訴客人會請農場主人回覆，急的話打電話 ${FARM.phone}。
 - 客人想找真人或老闆，或是抱怨、退款、商品損傷等需要真人處理的事，呼叫 flag_customer(status="human", reason=簡短說明)。
+- 下單、查訂單時訂單系統出錯（不是客人資料的問題），呼叫 flag_customer(status="human", reason=出了什麼錯)。
+- 要跟客人說「已請老闆處理」「會請農場主人回覆」之前，一定要先呼叫 flag_customer；沒有呼叫就不能這樣說。
 
 ## 其他
 - 客人傳貼圖、照片時，友善回應並問有什麼需要幫忙。
