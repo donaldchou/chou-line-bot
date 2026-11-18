@@ -1,12 +1,12 @@
 import { connectDB } from "./mongodb";
 import { AlertLog, LineUser, QaItem, type LineUserDoc, type QaItemDoc } from "./models";
 import { chat, type ToolHandler } from "./gemini";
-import { qaPhotoMessages, stripNotes, TOOLS } from "./bot";
+import { addMissingLinks, qaPhotoMessages, stripNotes, TOOLS } from "./bot";
 import { systemPrompt } from "./knowledge";
 import { getProducts, isSys, SYS_INFO } from "./ll3";
 import { push, textMsg, type LineMessage } from "./line";
 import { logMessage } from "./progress";
-import { DRAFT_ID, photoSummary, QaError, qaPromptText, sendsPhotos, type QaDraft } from "./qa";
+import { DRAFT_ID, linksIn, photoSummary, QaError, qaPromptText, sendsPhotos, type QaDraft } from "./qa";
 
 /* 問答管理的「先試問機器人」與「存檔後回覆客人」：用 Gemini 產生回覆，但不寫任何客戶資料 */
 
@@ -34,13 +34,15 @@ const followupAsk = (question: string) =>
 export async function previewAnswer(question: string, faq: string, opts: { name?: string; followup?: boolean; draft?: QaDraft } = {}) {
   const notes: string[] = [];
   let photos: PreviewPhotos | null = null;
+  const links: string[] = [];
   const handlers: Record<string, ToolHandler> = {
     async get_qa_answer(a) {
       const id = String(a.qa_id ?? "");
       const i: (PreviewPhotos & { a: string }) | null =
         id === DRAFT_ID && opts.draft ? opts.draft : await QaItem.findOne({ _id: id, active: true }).lean<QaItemDoc>();
       if (!i) return { error: "沒有這題" };
-      const answer = { answer: i.a || "（這題沒有文字回答）" };
+      const answer = { answer: i.a || "（這題沒有文字回答）", ...(linksIn(i.a).length ? { links: "回答裡的網址要完整附給客人" } : {}) };
+      if (i.sendMode !== "photo") links.push(...linksIn(i.a));
       if (!sendsPhotos(i)) return answer;
       if (!photos) photos = { productPhotos: i.productPhotos ?? [], pricePhotos: i.pricePhotos ?? [], sendMode: i.sendMode };
       return i.sendMode === "photo"
@@ -72,7 +74,7 @@ export async function previewAnswer(question: string, faq: string, opts: { name?
     TOOLS.filter((t) => PREVIEW_TOOLS.includes(t.name)),
     handlers,
   );
-  return { text: stripNotes(text), notes, photos: photos as PreviewPhotos | null };
+  return { text: addMissingLinks(stripNotes(text), links), notes, photos: photos as PreviewPhotos | null };
 }
 
 /** 加入問答後，用新的問答回覆當初問這題的客人（text：試問時看過的那段；沒有就重新產生） */

@@ -32,7 +32,7 @@ import {
 import { confirmCard, deliveryText, orderCarousel, payText, photoAlbum, productCarousel, successCard } from "./flex";
 import { imgSig } from "./sign";
 import { CAP_LABEL, capReplies, checkCapacity, productCaps } from "./capacity";
-import { photoSummary, qaPromptText, sendsPhotos } from "./qa";
+import { linksIn, photoSummary, qaPromptText, sendsPhotos } from "./qa";
 
 const HISTORY = 15;
 const DRAFT_DAYS = 3;
@@ -151,7 +151,15 @@ interface Turn {
   toolErrors: string[];
   /** 問答附的照片（get_qa_answer）：mode 決定跟文字的先後 */
   qaPhotos: { mode: QaSendMode; msgs: LineMessage[]; ids: string[] } | null;
+  /** 這一輪用到的問答裡的網址：AI 的回覆漏掉就補在最後 */
+  links: string[];
 }
+
+/** 回覆漏掉的網址補在最後（例如問答裡的 Google 導航連結） */
+export const addMissingLinks = (text: string, links: string[]) => {
+  const missing = [...new Set(links)].filter((u) => !text.includes(u));
+  return text && missing.length ? `${text}\n${missing.join("\n")}` : text;
+};
 
 /** 機器人有時會模仿對話紀錄，自己寫出「[已傳送照片…]」這類系統紀錄：傳給客人前拿掉 */
 export const stripNotes = (text: string) =>
@@ -449,7 +457,8 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
     async get_qa_answer(a) {
       const i = await QaItem.findOne({ _id: str(a.qa_id), active: true }).lean<QaItemDoc>();
       if (!i) return { error: "沒有這題" };
-      const answer = { answer: i.a || "（這題沒有文字回答）" };
+      const answer = { answer: i.a || "（這題沒有文字回答）", ...(linksIn(i.a).length ? { links: "回答裡的網址要完整附給客人" } : {}) };
+      if (i.sendMode !== "photo") t.links.push(...linksIn(i.a));
       if (!sendsPhotos(i)) return answer;
       const skip = (why: string) => ({ ...answer, photos: why });
       // 一則訊息問了兩件事時可以傳兩題的照片；同一題不重複，最多 2 題
@@ -506,7 +515,7 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   if (botPaused(user)) return;
   void showLoading(userId, 30);
 
-  const t: Turn = { user, text, out: [], quick: [], notes: [], flagged: false, toolErrors: [], qaPhotos: null };
+  const t: Turn = { user, text, out: [], quick: [], notes: [], flagged: false, toolErrors: [], qaPhotos: null, links: [] };
   let answer = "";
   let failed = "";
   const sentSomething = () => t.out.length > 0 || !!t.qaPhotos;
@@ -518,7 +527,7 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
     failed = e instanceof Error ? e.message : String(e);
     answer = sentSomething() ? "" : SORRY;
   }
-  answer = stripNotes(answer);
+  answer = addMissingLinks(stripNotes(answer), t.links);
   if (!answer && !sentSomething()) answer = SORRY;
 
   // 保險：機器人跟客人說「已請老闆處理」，或系統出錯沒回答到，但沒有呼叫 flag_customer → 一定要通知農場

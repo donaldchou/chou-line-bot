@@ -65,6 +65,10 @@ export const photoCount = (d: Pick<QaDraft, "productPhotos" | "pricePhotos">) =>
 /** 「產品照片 3 張、價格照片 1 張」 */
 export const photoSummary = (d: Pick<QaDraft, "productPhotos" | "pricePhotos">) =>
   [d.productPhotos?.length && `產品照片 ${d.productPhotos.length} 張`, d.pricePhotos?.length && `價格照片 ${d.pricePhotos.length} 張`].filter(Boolean).join("、");
+/** 回答裡的網址（客人一定要拿到，AI 漏掉時系統補上） */
+export const linksIn = (text: string) => [...new Set(text.match(/https?:\/\/[^\s，。、「」（）()<>]+/g) ?? [])];
+/** 這題要經過 get_qa_answer（有照片或網址） */
+export const viaTool = (d: Pick<QaDraft, "productPhotos" | "pricePhotos" | "sendMode" | "a">) => sendsPhotos(d) || linksIn(d.a ?? "").length > 0;
 /** 這題會傳照片（有照片、而且不是「只傳文字」） */
 export const sendsPhotos = (d: Pick<QaDraft, "productPhotos" | "pricePhotos" | "sendMode">) => photoCount(d) > 0 && (d.sendMode ?? "text") !== "text";
 
@@ -112,8 +116,8 @@ export async function qaPromptText(override?: { id?: string; draft: QaDraft }) {
       const body = rows
         .map((i) => {
           const lines = [`- 客人問：${i.q}${i.alt ? `（也可能這樣問：${i.alt}）` : ""}`];
-          // 有照片的題目不直接給回答：AI 要呼叫 get_qa_answer 才拿得到回答，同時把照片傳出去（不靠 AI 記得另外傳照片）
-          if (sendsPhotos(i)) lines.push(`  ※ 這題的回答在系統裡：一定要先呼叫 get_qa_answer(qa_id="${i._id}")，照它回傳的內容回覆`);
+          // 有照片或網址的題目不直接給回答：AI 要呼叫 get_qa_answer 才拿得到回答，系統同時傳照片、補上漏掉的網址（不靠 AI 記得）
+          if (viaTool(i)) lines.push(`  ※ 這題的回答在系統裡：一定要先呼叫 get_qa_answer(qa_id="${i._id}")，照它回傳的內容回覆`);
           else if (i.a) lines.push(`  回答重點：${i.a}`);
           if (i.notify) lines.push(`  ※ 回答這題後，同時呼叫 flag_customer(status="human", reason="客人問：${i.q}")`);
           return lines.join("\n");
