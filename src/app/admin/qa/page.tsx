@@ -472,7 +472,7 @@ function Editor({
           </Field>
         </div>
 
-        <Field label="其他問法（選填，用「、」分開）" hint={<span className="text-mute">機器人看得懂意思相近的問法，這欄只是幫它更準。</span>}>
+        <Field label="其他問法（選填，用「，」或「、」分開）" hint={<span className="text-mute">機器人看得懂意思相近的問法，這欄只是幫它更準。</span>}>
           <input value={f.alt} maxLength={300} onChange={(e) => set({ alt: e.target.value })} className={`${inputCls} font-normal`} />
         </Field>
 
