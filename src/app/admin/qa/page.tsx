@@ -757,28 +757,37 @@ function PhotoZone({
     if (!list.length) return;
     onError("");
     if (list.length > left) onError(`${label}最多 ${MAX_PHOTOS} 張，只會加入前 ${left} 張`);
-    let cur = [...names];
     const todo = list.slice(0, left);
-    try {
-      for (let i = 0; i < todo.length; i++) {
-        setProgress(`上傳中 ${i + 1}／${todo.length}…`);
-        const blob = await toJpeg(todo[i]);
-        const res = await fetch("/api/admin/qa/photo", {
-          method: "POST",
-          body: blob,
-          headers: { "content-type": "image/jpeg", "x-verify-code": encodeURIComponent(code) },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.name) throw new Error(data.error ?? `上傳失敗（HTTP ${res.status}）`);
-        onUploaded(data.name);
-        cur = [...cur, data.name];
-        onChange(cur);
+    // 同時傳 3 張；照選的順序放進來（失敗的那張略過，其他照常加入）
+    const done: (string | null)[] = todo.map(() => null);
+    let finished = 0;
+    let next = 0;
+    let firstError = "";
+    setProgress(`上傳中 0／${todo.length}…`);
+    const worker = async () => {
+      while (next < todo.length) {
+        const i = next++;
+        try {
+          const blob = await toJpeg(todo[i]);
+          const res = await fetch("/api/admin/qa/photo", {
+            method: "POST",
+            body: blob,
+            headers: { "content-type": "image/jpeg", "x-verify-code": encodeURIComponent(code) },
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.name) throw new Error(data.error ?? `上傳失敗（HTTP ${res.status}）`);
+          onUploaded(data.name);
+          done[i] = data.name;
+          onChange([...names, ...done.filter((n): n is string => !!n)]);
+        } catch (e) {
+          firstError ||= errMsg(e);
+        }
+        setProgress(`上傳中 ${++finished}／${todo.length}…`);
       }
-    } catch (e) {
-      onError(errMsg(e));
-    } finally {
-      setProgress(null);
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, todo.length) }, worker));
+    setProgress(null);
+    if (firstError) onError(firstError);
   }
 
   const move = (i: number, d: -1 | 1) => {
