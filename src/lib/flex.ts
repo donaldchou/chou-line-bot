@@ -131,11 +131,11 @@ export function successCard(d: OrderDraftDoc, orderId: number) {
           size: "sm",
           color: GREY,
           margin: "md",
-          text: "查詢訂單：在這裡輸入「查訂單」，或到訂單查詢網頁，輸入訂購者姓名或電話。出貨時我們也會用 LINE 通知您。",
+          text: "查詢訂單：在這裡輸入「查訂單」，或按下面的按鈕看訂單進度、回報繳費。出貨時我們也會用 LINE 通知您。",
         },
       ],
     },
-    footer: { type: "box", layout: "vertical", contents: [btn("開啟訂單查詢網頁", { type: "uri", uri: queryPage(d.sys) }, "secondary")] },
+    footer: { type: "box", layout: "vertical", contents: [btn("查看訂單進度", { type: "uri", uri: queryPage(d.sys, d.data.buyerPhone) }, "secondary")] },
   });
 }
 

@@ -15,8 +15,17 @@ export const SYS_INFO: Record<Sys, { label: string; dir: string }> = {
 };
 
 export const sysBase = (sys: Sys) => `${HOST}/${SYS_INFO[sys].dir}`;
-/** 客人自己查訂單的網頁 */
-export const queryPage = (sys: Sys) => `${sysBase(sys)}/queryorder.asp`;
+/**
+ * 客人自己查訂單的網頁。
+ * queryorder.asp 只是「查詢結果」頁，沒帶條件會是空的（只有「回到查詢頁」按鈕）：
+ * 有電話就直接帶電話顯示結果，沒有就開網站的訂單查詢輸入頁（甜柿 index37、水蜜桃 index27）。
+ */
+export const queryPage = (sys: Sys, phone?: string) => {
+  const digits = (phone ?? "").replace(/\D/g, "");
+  return digits.length >= 8
+    ? `${sysBase(sys)}/queryorder.asp?phone=${digits}`
+    : `${HOST}/${sys === "kaki" ? "index37.asp" : "index27.asp"}`;
+};
 export const isSys = (v: unknown): v is Sys => v === "kaki" || v === "peach";
 
 /** Big5 沒有的字先轉成 &#NNNNN;（同網站下單），再整串轉成「x＋UTF-16 hex」送給 ASP */
