@@ -14,7 +14,8 @@ import {
 } from "./models";
 import { botPaused, logMessage, previewText, setStage } from "./progress";
 import { getProfile, imageMsg, send, showLoading, textMsg, withQuickReply, type LineMessage, type QuickItem } from "./line";
-import { chat, type Content, type FunctionDecl, type ToolHandler } from "./gemini";
+import type { Content, FunctionDecl, ToolHandler } from "./gemini";
+import { chat } from "./ai";
 import { systemPrompt, FARM } from "./knowledge";
 import {
   createOrder,
@@ -34,7 +35,7 @@ import { imgSig } from "./sign";
 import { CAP_LABEL, capReplies, checkCapacity, productCaps } from "./capacity";
 import { linksIn, photoSummary, qaPromptText, sendsPhotos } from "./qa";
 
-const HISTORY = 15;
+const HISTORY = 30;
 const DRAFT_DAYS = 3;
 const SORRY = `不好意思，系統現在有點忙，請稍後再傳一次訊息，或直接來電 ${FARM.phone}，謝謝您！`;
 
@@ -500,6 +501,21 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
   };
 }
 
+/** 這位客人最近一筆成功的訂單（給 AI 處理「跟上次一樣」；對話紀錄太舊看不到也找得到） */
+async function lastOrderText(userId: string) {
+  const d = await OrderDraft.findOne({ userId, status: "created" }).sort({ orderedAt: -1 }).lean();
+  if (!d) return "";
+  const x = d.data;
+  const day = d.orderedAt ? new Date(d.orderedAt).toLocaleDateString("zh-TW", { timeZone: "Asia/Taipei" }) : "";
+  return [
+    `${day} ${SYS_INFO[d.sys].label}：${d.quote.lines.map((l) => `${l.name}x${l.qty}`).join("、")}`,
+    `訂購者 ${x.buyerName}（${x.buyerSex === "F" ? "小姐" : "先生"}）${x.buyerPhone}${x.buyerPhone2 ? `／${x.buyerPhone2}` : ""}${x.buyerEmail ? `，Email ${x.buyerEmail}` : ""}`,
+    `收件者 ${x.recipientSame ? "同訂購者" : `${x.recipientName} ${x.recipientPhone}${x.recipientPhone2 ? `／${x.recipientPhone2}` : ""}`}`,
+    `地址 ${x.address}`,
+    `送達時段 ${x.delivery === "NIGHT" ? "晚上（已停止，要請客人重選）" : deliveryText(x.delivery)}，付款 ${payText(x.pay)}`,
+  ].join("\n");
+}
+
 async function history(userId: string): Promise<Content[]> {
   const rows = await ChatMessage.find({ userId }).sort({ at: -1 }).limit(HISTORY).lean();
   const list: Content[] = rows.reverse().map((r) => ({ role: r.role, parts: [{ text: r.text }] }));
@@ -521,7 +537,8 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   const sentSomething = () => t.out.length > 0 || !!t.qaPhotos;
   try {
     const faq = await qaPromptText().catch((e) => (console.error("qaPromptText", e), ""));
-    answer = await chat(systemPrompt(new Date(), user.displayName, faq), await history(userId), TOOLS, handlers(t));
+    const [hist, last] = await Promise.all([history(userId), lastOrderText(userId).catch(() => "")]);
+    answer = await chat(systemPrompt(new Date(), user.displayName, faq, last), hist, TOOLS, handlers(t));
   } catch (e) {
     console.error("chat", e);
     failed = e instanceof Error ? e.message : String(e);

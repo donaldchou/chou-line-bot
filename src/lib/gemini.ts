@@ -74,9 +74,9 @@ async function generate(system: string, contents: Content[], tools: FunctionDecl
 }
 
 /** 跑一輪對話：模型要呼叫函式就執行後把結果交回，最多 5 回合；回傳最後的文字 */
-export async function chat(system: string, contents: Content[], tools: FunctionDecl[], handlers: Record<string, ToolHandler>) {
+export async function chat(system: string, contents: Content[], tools: FunctionDecl[], handlers: Record<string, ToolHandler>, budget = CHAT_BUDGET) {
   const convo = [...contents];
-  const deadline = Date.now() + CHAT_BUDGET;
+  const deadline = Date.now() + Math.min(budget, CHAT_BUDGET);
   for (let round = 0; round < 5; round++) {
     const out = await generate(system, convo, tools, deadline, round > 0);
     if (!out.parts.length) return "";

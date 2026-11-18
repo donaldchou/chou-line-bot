@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
     "iconv-lite": "^0.7.3",
     "mongoose": "^9.11.4",
     "next": "16.4.3",

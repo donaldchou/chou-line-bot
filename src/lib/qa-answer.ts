@@ -1,6 +1,7 @@
 import { connectDB } from "./mongodb";
 import { AlertLog, LineUser, QaItem, type LineUserDoc, type QaItemDoc } from "./models";
-import { chat, type ToolHandler } from "./gemini";
+import type { ToolHandler } from "./gemini";
+import { chat } from "./ai";
 import { addMissingLinks, qaPhotoMessages, stripNotes, TOOLS } from "./bot";
 import { systemPrompt } from "./knowledge";
 import { getProducts, isSys, SYS_INFO } from "./ll3";
