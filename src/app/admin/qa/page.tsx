@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { CatView, QaPageData, QaView, UnansweredView } from "@/lib/qa";
+import type { PreviewPhotos } from "@/lib/qa-answer";
 import { Icon } from "../_ui/icons";
-import { call, errMsg, Field, inputCls, Modal, PageHeader, smallBtn, Tabs } from "../_ui/kit";
+import { call, errMsg, Field, inputCls, Modal, PageHeader, smallBtn, Tabs, UnlockPanel, useCodeGate, type CodeResult } from "../_ui/kit";
 import { useCanEdit } from "../_ui/me";
 import { ago, btn, card, ErrorBar, usePoll } from "../_ui/ui";
 
@@ -20,8 +21,28 @@ const CAT_COLORS = [
   { bg: "#F1EDE4", fg: "#6B5320" },
 ];
 
-/** item=編輯；alert=從答不出來的問題加入；copy=複製一則問答來新增 */
-type Editing = { item?: QaView; alert?: UnansweredView; copy?: QaView };
+/** item=編輯；alert=從答不出來的問題加入；copy=複製一則問答來新增；code＝打開前輸入的驗證碼（解鎖中是空字串） */
+type Editing = { item?: QaView; alert?: UnansweredView; copy?: QaView; code: string };
+
+const MAX_PHOTOS = 10;
+type SendMode = QaView["sendMode"];
+const SEND_MODES: { value: SendMode; label: string }[] = [
+  { value: "text", label: "只傳文字" },
+  { value: "photo", label: "只傳照片" },
+  { value: "text_photo", label: "先傳文字，再傳照片" },
+  { value: "photo_text", label: "先傳照片，再傳文字" },
+];
+const photoSrc =(name: string) => `/api/qa-photo/${name}`;
+
+/** 只檢查驗證碼（打開表單前），真正存檔時後端會再檢查一次 */
+const verifyCode = async (code: string): Promise<CodeResult> => {
+  try {
+    await call("/api/admin/system/verify-code", { method: "POST", code });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errMsg(e) };
+  }
+};
 
 export default function QaPage() {
   const { data: d, error, reload } = usePoll<Data>("/api/admin/qa", 60_000);
@@ -30,7 +51,8 @@ export default function QaPage() {
   const [q, setQ] = useState("");
   const [unTab, setUnTab] = useState<"pending" | "done">("pending");
   const [editing, setEditing] = useState<Editing | null>(null);
-  const [catsOpen, setCatsOpen] = useState(false);
+  const [catsCode, setCatsCode] = useState<string | null>(null);
+  const gate = useCodeGate();
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");
@@ -51,19 +73,39 @@ export default function QaPage() {
   const pending = d?.unanswered.filter((u) => !u.qaId) ?? [];
   const done = d?.unanswered.filter((u) => u.qaId) ?? [];
 
-  const act = async (key: string, json: unknown) => {
-    setBusy(key);
-    setErr("");
-    setMsg("");
-    try {
-      await call("/api/admin/qa", { method: "POST", json });
-      await reload();
-    } catch (e) {
-      setErr(errMsg(e));
-    } finally {
-      setBusy("");
-    }
-  };
+  /** 啟用／停用、刪除：先要驗證碼（解鎖中直接送出；刪除仍會顯示確認） */
+  const act = (key: string, json: unknown, ask: { title: string; confirmLabel: string; message: string; danger?: boolean }) =>
+    gate.ask({
+      ...ask,
+      submit: async (code) => {
+        setBusy(key);
+        setErr("");
+        setMsg("");
+        try {
+          await call("/api/admin/qa", { method: "POST", json, code });
+          await reload();
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: errMsg(e) };
+        } finally {
+          setBusy("");
+        }
+      },
+    });
+
+  /** 打開新增／編輯／分類前先確認驗證碼，之後存檔、上傳照片都用這個驗證碼 */
+  const openWith = (title: string, open: (code: string) => void) =>
+    gate.ask({
+      title,
+      confirmLabel: "開始編輯",
+      message: "新增、修改、刪除問答需要驗證碼。",
+      submit: async (code) => {
+        const r = await verifyCode(code);
+        if (r.ok) open(code);
+        return r;
+      },
+    });
+  const edit = (e: Omit<Editing, "code">, title: string) => openWith(title, (code) => setEditing({ ...e, code }));
 
   return (
     <main className="px-4 pb-10 pt-5 md:px-8 md:pt-7">
@@ -72,11 +114,12 @@ export default function QaPage() {
         desc="機器人回答客人時會參考這裡的問答，存檔後立刻生效。價格、運費、手續費、能不能訂由系統自動處理，不在這裡改。"
       >
         {canEdit && (
-          <button type="button" className={btn("pri")} onClick={() => setEditing({})} disabled={!d}>
+          <button type="button" className={btn("pri")} onClick={() => edit({}, "新增問答")} disabled={!d}>
             <Icon name="plus" size={18} /> 新增問答
           </button>
         )}
       </PageHeader>
+      {canEdit && <UnlockPanel />}
       <ErrorBar messages={[error, err]} />
       {msg && (
         <div role="status" className="mb-4 rounded-xl border border-[#B7DEC6] bg-[#EEF7F1] px-4 py-3 text-sm text-[#17613E]">
@@ -137,7 +180,7 @@ export default function QaPage() {
                   )}
                 </div>
                 {!u.qaId && canEdit && (
-                  <button type="button" className={btn("pri")} onClick={() => setEditing({ alert: u })}>
+                  <button type="button" className={btn("pri")} onClick={() => edit({ alert: u }, "加入問答")}>
                     加入問答
                   </button>
                 )}
@@ -160,7 +203,7 @@ export default function QaPage() {
                 <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜尋問題或回答…" className={inputCls} />
               </label>
               {canEdit && (
-                <button type="button" className={btn()} onClick={() => setCatsOpen(true)}>
+                <button type="button" className={btn()} onClick={() => openWith("管理分類", setCatsCode)}>
                   管理分類
                 </button>
               )}
@@ -187,6 +230,19 @@ export default function QaPage() {
                   <div className={`min-w-0 flex-[999_1_320px] whitespace-pre-line text-sm leading-relaxed ${i.active ? "text-ink2" : "text-mute"}`}>
                     {i.a}
                     {i.notify && <div className="mt-1.5 text-xs font-bold text-[#8A4B00]">客人問到時，同時通知你</div>}
+                    {i.productPhotos.length + i.pricePhotos.length > 0 && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        {[...i.productPhotos, ...i.pricePhotos].slice(0, 6).map((n) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img key={n} src={photoSrc(n)} alt="" loading="lazy" className="h-12 w-12 rounded-md border border-line object-cover" />
+                        ))}
+                        <span className="text-xs text-mute">
+                          {[i.productPhotos.length && `產品 ${i.productPhotos.length} 張`, i.pricePhotos.length && `價格 ${i.pricePhotos.length} 張`].filter(Boolean).join("、")}
+                          {" · "}
+                          {SEND_MODES.find((m) => m.value === i.sendMode)?.label}
+                        </span>
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-none items-start gap-1">
                     <label className="flex min-h-9 cursor-pointer items-center gap-2 pr-1 text-[13px] text-ink2">
@@ -195,26 +251,36 @@ export default function QaPage() {
                         role="switch"
                         checked={i.active}
                         disabled={!canEdit || !!busy}
-                        onChange={(e) => act(`t-${i.id}`, { action: "toggle", id: i.id, active: e.target.checked })}
+                        onChange={(e) =>
+                          act(
+                            `t-${i.id}`,
+                            { action: "toggle", id: i.id, active: e.target.checked },
+                            { title: e.target.checked ? "啟用問答" : "停用問答", confirmLabel: e.target.checked ? "啟用" : "停用", message: `「${i.q}」${e.target.checked ? "啟用後機器人會用這段回答" : "停用後機器人不會再用這段回答"}，需要驗證碼。` },
+                          )
+                        }
                         className="h-5 w-5 accent-leaf"
                       />
                       啟用
                     </label>
                     {canEdit && (
                       <>
-                        <button type="button" className={smallBtn("pri")} onClick={() => setEditing({ item: i })}>
+                        <button type="button" className={smallBtn("pri")} onClick={() => edit({ item: i }, "編輯問答")}>
                           <Icon name="edit" size={16} /> 編輯
                         </button>
-                        <button type="button" className={smallBtn()} onClick={() => setEditing({ copy: i })}>
+                        <button type="button" className={smallBtn()} onClick={() => edit({ copy: i }, "複製問答")}>
                           <Icon name="plus" size={16} /> 複製
                         </button>
                         <button
                           type="button"
                           className={smallBtn("danger")}
                           disabled={!!busy}
-                          onClick={() => {
-                            if (confirm(`確定刪除「${i.q}」？刪除後機器人就不會再用這段回答。`)) void act(`d-${i.id}`, { action: "delete", id: i.id });
-                          }}
+                          onClick={() =>
+                            act(
+                              `d-${i.id}`,
+                              { action: "delete", id: i.id },
+                              { title: "刪除問答", confirmLabel: "刪除", danger: true, message: `確定刪除「${i.q}」？刪除後機器人就不會再用這段回答，附的照片也會一起刪掉。` },
+                            )
+                          }
                         >
                           <Icon name="trash" size={16} /> 刪除
                         </button>
@@ -259,16 +325,18 @@ export default function QaPage() {
           onReplyError={(e) => setErr(e)}
         />
       )}
-      {catsOpen && d && (
+      {catsCode !== null && d && (
         <CatsEditor
           cats={d.categories}
-          onClose={() => setCatsOpen(false)}
+          code={catsCode}
+          onClose={() => setCatsCode(null)}
           onSaved={async () => {
-            setCatsOpen(false);
+            setCatsCode(null);
             await reload();
           }}
         />
       )}
+      {gate.dialog}
     </main>
   );
 }
@@ -294,7 +362,7 @@ function Editor({
   onSaved: (msg: string) => Promise<void>;
   onReplyError: (e: string) => void;
 }) {
-  const { item, alert, copy } = editing;
+  const { item, alert, copy, code } = editing;
   const src = item ?? copy;
   const [f, setF] = useState({
     cat: src?.cat ?? defaultCat ?? cats[0]?.id ?? "",
@@ -302,18 +370,36 @@ function Editor({
     alt: src?.alt ?? "",
     a: src?.a ?? "",
     notify: src?.notify ?? false,
+    productPhotos: src?.productPhotos ?? [],
+    pricePhotos: src?.pricePhotos ?? [],
+    sendMode: src?.sendMode ?? ("text" as SendMode),
   });
   const [copiedFrom, setCopiedFrom] = useState(copy?.id ?? "");
-  // 從其他問答複製：帶入分類、其他問法、回答、通知設定；「客人原話」加入時保留客人的問題
+  // 從其他問答複製：帶入分類、其他問法、回答、照片、傳送方式、通知設定；「客人原話」加入時保留客人的問題
   const copyFrom = (id: string) => {
     setCopiedFrom(id);
     const s = items.find((x) => x.id === id);
     if (!s) return;
-    set({ cat: s.cat, q: alert?.question || s.q, alt: s.alt, a: s.a, notify: s.notify });
+    set({ cat: s.cat, q: alert?.question || s.q, alt: s.alt, a: s.a, notify: s.notify, productPhotos: s.productPhotos, pricePhotos: s.pricePhotos, sendMode: s.sendMode });
   };
+  // 這次編輯上傳的照片：取消或存檔時，沒用到的要從 ll3 刪掉
+  const [uploaded] = useState<Set<string>>(() => new Set());
+  const discard = (keep: string[]) => {
+    const drop = [...uploaded].filter((n) => !keep.includes(n));
+    if (!drop.length) return;
+    void fetch(`/api/admin/qa/photo?${new URLSearchParams(drop.map((n) => ["n", n]))}`, {
+      method: "DELETE",
+      headers: { "x-verify-code": encodeURIComponent(code) },
+    }).catch(() => {});
+  };
+  const cancel = () => {
+    discard([]);
+    onClose();
+  };
+  const photoCount = f.productPhotos.length + f.pricePhotos.length;
   const [reply, setReply] = useState(!!alert);
   const [ask, setAsk] = useState(alert?.question || alert?.reason || src?.q || "");
-  const [preview, setPreview] = useState<{ key: string; text: string; notes: string[] } | null>(null);
+  const [preview, setPreview] = useState<{ key: string; text: string; notes: string[]; photos: PreviewPhotos | null } | null>(null);
   const [trying, setTrying] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -332,11 +418,11 @@ function Editor({
     setTrying(true);
     setError("");
     try {
-      const r = await call<{ text: string; notes: string[] }>("/api/admin/qa/try", {
+      const r = await call<{ text: string; notes: string[]; photos: PreviewPhotos | null }>("/api/admin/qa/try", {
         method: "POST",
-        json: { ...f, id: item?.id, question: ask, followup },
+        json: { ...f, cat: catValue, id: item?.id, question: ask, followup },
       });
-      setPreview({ key: keyNow, text: r.text, notes: r.notes });
+      setPreview({ key: keyNow, ...r });
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -349,7 +435,7 @@ function Editor({
     if (!name) return;
     setError("");
     try {
-      await call("/api/admin/qa", { method: "POST", json: { action: "cats", cats: [...cats.map((c) => ({ id: c.id, name: c.name })), { name }] } });
+      await call("/api/admin/qa", { method: "POST", code, json: { action: "cats", cats: [...cats.map((c) => ({ id: c.id, name: c.name })), { name }] } });
       await onCatsChanged();
       setNewCat(null);
       setF((x) => ({ ...x, cat: `name:${name}` }));
@@ -368,6 +454,7 @@ function Editor({
       const usePreview = reply && followup && preview?.key === keyNow && preview.text;
       const r = await call<{ replied: string | null; replyError: string | null }>("/api/admin/qa", {
         method: "POST",
+        code,
         json: {
           action: "save",
           ...f,
@@ -376,6 +463,7 @@ function Editor({
           ...(alert ? { alertId: alert.id, reply, ...(usePreview ? { replyText: preview!.text } : {}) } : {}),
         },
       });
+      discard([...f.productPhotos, ...f.pricePhotos]);
       if (r.replyError) onReplyError(`問答已存好，但回覆 ${alert?.name} 失敗：${r.replyError}`);
       await onSaved(r.replied ? `問答已存好，也已用 LINE 回覆 ${alert?.name}。` : item ? "問答已更新，機器人立刻會用新的內容回答。" : "問答已新增，機器人立刻會用這段回答。");
     } catch (e) {
@@ -387,12 +475,12 @@ function Editor({
 
   return (
     <Modal
-      onClose={onClose}
+      onClose={cancel}
       title={item ? "編輯問答" : alert ? "加入問答" : copy ? "複製問答" : "新增問答"}
       wide
       footer={
         <>
-          <button type="button" className={btn()} onClick={onClose}>
+          <button type="button" className={btn()} onClick={cancel}>
             取消
           </button>
           <button type="button" className={btn("pri")} onClick={save} disabled={saving}>
@@ -476,9 +564,64 @@ function Editor({
           <input value={f.alt} maxLength={300} onChange={(e) => set({ alt: e.target.value })} className={`${inputCls} font-normal`} />
         </Field>
 
-        <Field label="回答" hint={<span className="text-mute">寫重點就好，機器人會用親切的口氣回覆客人。</span>}>
+        <Field
+          label={f.sendMode === "photo" ? "回答（選填）" : "回答"}
+          hint={<span className="text-mute">{f.sendMode === "photo" ? "只傳照片時，這裡可以留空，或寫給機器人看的說明（例如照片是什麼）。" : "寫重點就好，機器人會用親切的口氣回覆客人。"}</span>}
+        >
           <textarea rows={4} value={f.a} maxLength={2000} onChange={(e) => set({ a: e.target.value })} className={`${inputCls} py-2 font-normal leading-relaxed`} />
         </Field>
+
+        <section aria-labelledby="photos-h" className="flex flex-col gap-3 rounded-xl border border-line bg-white px-3.5 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 id="photos-h" className="font-bold">
+              照片
+            </h3>
+            <span className="text-xs text-mute">選填，每區最多 {MAX_PHOTOS} 張；上傳時會自動縮小</span>
+          </div>
+          <PhotoZone
+            label="產品照片"
+            names={f.productPhotos}
+            code={code}
+            onUploaded={(n) => uploaded.add(n)}
+            onChange={(productPhotos) => setF((x) => ({ ...x, productPhotos, sendMode: autoMode(x, productPhotos.length + x.pricePhotos.length) }))}
+            onError={setError}
+          />
+          <PhotoZone
+            label="價格照片"
+            names={f.pricePhotos}
+            code={code}
+            onUploaded={(n) => uploaded.add(n)}
+            onChange={(pricePhotos) => setF((x) => ({ ...x, pricePhotos, sendMode: autoMode(x, x.productPhotos.length + pricePhotos.length) }))}
+            onError={setError}
+          />
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="mb-1.5 text-sm font-bold">傳給客人的方式</legend>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {SEND_MODES.map((m) => {
+                const off = m.value !== "text" && photoCount === 0;
+                return (
+                  <label
+                    key={m.value}
+                    className={`flex min-h-10 items-center gap-2.5 rounded-lg border px-3 text-sm ${f.sendMode === m.value ? "border-leaf bg-[#EEF7F1] font-bold" : "border-line"} ${off ? "text-mute" : "cursor-pointer"}`}
+                  >
+                    <input
+                      type="radio"
+                      name="sendMode"
+                      value={m.value}
+                      checked={f.sendMode === m.value}
+                      disabled={off}
+                      onChange={() => set({ sendMode: m.value })}
+                      className="h-4 w-4 accent-leaf"
+                    />
+                    {m.label}
+                  </label>
+                );
+              })}
+            </div>
+            {photoCount === 0 && <p className="text-xs text-mute">先上傳照片，才能選擇傳照片。</p>}
+            {photoCount > 0 && f.sendMode === "text" && <p className="text-xs font-bold text-[#8A4B00]">選「只傳文字」時，照片不會傳給客人。</p>}
+          </fieldset>
+        </section>
 
         <div className="flex flex-col gap-1 text-sm">
           <label className="flex min-h-9 items-center gap-2.5">
@@ -511,9 +654,36 @@ function Editor({
           </div>
           {preview && (
             <div className="flex flex-col gap-2 rounded-lg bg-chatbg p-3">
-              <div className="max-w-[80%] self-start whitespace-pre-line rounded-[14px_14px_14px_4px] bg-white px-3 py-2 text-sm leading-relaxed">
-                {preview.text || "（機器人沒有回覆文字）"}
-              </div>
+              {(() => {
+                const p = preview.photos;
+                const albums = p
+                  ? [
+                      ["產品照片", p.productPhotos],
+                      ["價格照片", p.pricePhotos],
+                    ].filter(([, l]) => l.length) as [string, string[]][]
+                  : [];
+                const photoFirst = p?.sendMode === "photo" || p?.sendMode === "photo_text";
+                const textBubble =
+                  preview.text || !p ? (
+                    <div key="text" className="max-w-[80%] self-start whitespace-pre-line rounded-[14px_14px_14px_4px] bg-white px-3 py-2 text-sm leading-relaxed">
+                      {preview.text || "（機器人沒有回覆文字）"}
+                    </div>
+                  ) : null;
+                const photoBubbles = albums.map(([label, list]) => (
+                  <div key={label} className="flex max-w-full flex-col gap-1 self-start">
+                    <span className="text-xs font-bold text-ink2">
+                      {label}（{list.length} 張，客人可左右滑）
+                    </span>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1">
+                      {list.map((n) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img key={n} src={photoSrc(n)} alt="" className="h-24 w-[72px] flex-none rounded-lg border border-line bg-white object-contain" />
+                      ))}
+                    </div>
+                  </div>
+                ));
+                return photoFirst ? [...photoBubbles, textBubble] : [textBubble, ...photoBubbles];
+              })()}
               {preview.notes.map((n) => (
                 <div key={n} className="text-xs font-bold text-[#8A4B00]">
                   {n}
@@ -538,9 +708,151 @@ function Editor({
   );
 }
 
+/* ---------------- 照片 ---------------- */
+
+/** 第一次放照片時預設「先傳文字，再傳照片」；照片全拿掉就回到「只傳文字」 */
+function autoMode(prev: { sendMode: SendMode; productPhotos: string[]; pricePhotos: string[] }, total: number): SendMode {
+  if (total === 0) return "text";
+  if (prev.productPhotos.length + prev.pricePhotos.length === 0 && prev.sendMode === "text") return "text_photo";
+  return prev.sendMode;
+}
+
+/** 長邊最多 2000px（價格表的小字還看得清楚），轉成 JPEG；透明背景補白色 */
+async function toJpeg(file: File): Promise<Blob> {
+  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" }).catch(() => {
+    throw new Error(`「${file.name}」不是看得懂的照片格式，請改傳 JPG 或 PNG`);
+  });
+  const scale = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bmp.width * scale);
+  canvas.height = Math.round(bmp.height * scale);
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  bmp.close();
+  return new Promise((ok, fail) => canvas.toBlob((b) => (b ? ok(b) : fail(new Error("照片轉檔失敗"))), "image/jpeg", 0.85));
+}
+
+function PhotoZone({
+  label,
+  names,
+  code,
+  onUploaded,
+  onChange,
+  onError,
+}: {
+  label: string;
+  names: string[];
+  code: string;
+  onUploaded: (name: string) => void;
+  onChange: (names: string[]) => void;
+  onError: (e: string) => void;
+}) {
+  const [progress, setProgress] = useState<string | null>(null);
+  const left = MAX_PHOTOS - names.length;
+
+  async function add(files: FileList | null) {
+    const list = [...(files ?? [])];
+    if (!list.length) return;
+    onError("");
+    if (list.length > left) onError(`${label}最多 ${MAX_PHOTOS} 張，只會加入前 ${left} 張`);
+    let cur = [...names];
+    const todo = list.slice(0, left);
+    try {
+      for (let i = 0; i < todo.length; i++) {
+        setProgress(`上傳中 ${i + 1}／${todo.length}…`);
+        const blob = await toJpeg(todo[i]);
+        const res = await fetch("/api/admin/qa/photo", {
+          method: "POST",
+          body: blob,
+          headers: { "content-type": "image/jpeg", "x-verify-code": encodeURIComponent(code) },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.name) throw new Error(data.error ?? `上傳失敗（HTTP ${res.status}）`);
+        onUploaded(data.name);
+        cur = [...cur, data.name];
+        onChange(cur);
+      }
+    } catch (e) {
+      onError(errMsg(e));
+    } finally {
+      setProgress(null);
+    }
+  }
+
+  const move = (i: number, d: -1 | 1) => {
+    const next = [...names];
+    [next[i], next[i + d]] = [next[i + d], next[i]];
+    onChange(next);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2 text-sm">
+        <span className="font-bold">{label}</span>
+        <span className="text-xs text-mute">
+          {names.length}／{MAX_PHOTOS} 張
+        </span>
+        {progress && (
+          <span role="status" className="text-xs font-bold text-leaf">
+            {progress}
+          </span>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {names.map((n, i) => (
+          <div key={n} className="flex w-[92px] flex-col gap-1">
+            <a href={photoSrc(n)} target="_blank" rel="noreferrer" title="看大圖" className="block h-[92px] overflow-hidden rounded-lg border border-line bg-ground">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={photoSrc(n)} alt={`${label} 第 ${i + 1} 張`} className="h-full w-full object-cover" />
+            </a>
+            <div className="flex justify-between">
+              <button type="button" aria-label="往前移" disabled={i === 0 || !!progress} onClick={() => move(i, -1)} className="flex h-7 w-7 items-center justify-center rounded-md text-ink2 hover:bg-ground disabled:text-field">
+                <Icon name="arrowUp" size={14} className="-rotate-90" />
+              </button>
+              <button
+                type="button"
+                aria-label={`移除${label}第 ${i + 1} 張`}
+                disabled={!!progress}
+                onClick={() => onChange(names.filter((x) => x !== n))}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-[#B3261E] hover:bg-[#FDECEA] disabled:text-field"
+              >
+                <Icon name="trash" size={14} />
+              </button>
+              <button type="button" aria-label="往後移" disabled={i === names.length - 1 || !!progress} onClick={() => move(i, 1)} className="flex h-7 w-7 items-center justify-center rounded-md text-ink2 hover:bg-ground disabled:text-field">
+                <Icon name="arrowUp" size={14} className="rotate-90" />
+              </button>
+            </div>
+          </div>
+        ))}
+        {left > 0 && (
+          <label
+            className={`flex h-[92px] w-[92px] flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-field text-xs text-ink2 ${progress ? "opacity-50" : "cursor-pointer hover:border-leaf hover:text-leaf"}`}
+          >
+            <Icon name="plus" size={20} />
+            加照片
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              disabled={!!progress}
+              className="sr-only"
+              onChange={(e) => {
+                void add(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- 管理分類 ---------------- */
 
-function CatsEditor({ cats, onClose, onSaved }: { cats: CatView[]; onClose: () => void; onSaved: () => Promise<void> }) {
+function CatsEditor({ cats, code, onClose, onSaved }: { cats: CatView[]; code: string; onClose: () => void; onSaved: () => Promise<void> }) {
   const [rows, setRows] = useState(cats.map((c) => ({ id: c.id as string | undefined, name: c.name, count: c.count, key: c.id })));
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -555,7 +867,7 @@ function CatsEditor({ cats, onClose, onSaved }: { cats: CatView[]; onClose: () =
     setSaving(true);
     setError("");
     try {
-      await call("/api/admin/qa", { method: "POST", json: { action: "cats", cats: rows.map((r) => ({ id: r.id, name: r.name })) } });
+      await call("/api/admin/qa", { method: "POST", code, json: { action: "cats", cats: rows.map((r) => ({ id: r.id, name: r.name })) } });
       await onSaved();
     } catch (e) {
       setError(errMsg(e));

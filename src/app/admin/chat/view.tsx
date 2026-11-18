@@ -362,7 +362,7 @@ function steps(d: CustomerDetail) {
     { key: "ask", name: "詢問", at: c?.at ?? null, sub: SYS_LABEL[d.row.sys ?? ""] ? `問${SYS_LABEL[d.row.sys ?? ""]}` : "" },
     { key: "fill", name: "填寫資料", at: c?.fill ?? null, sub: s === "fill" && d.missing ? `還缺：${d.missing}` : "" },
     { key: "confirm", name: "等客人確認", at: c?.confirm ?? null, sub: d.draft ? `確認卡 ${money(d.draft.total)}` : "" },
-    { key: "ordered", name: "結單（建立訂單）", at: c?.ordered ?? null, sub: last && cur >= 3 ? `${SYS_LABEL[last.sys]} No.${last.orderId}` : "客人按「確認下單」後" },
+    { key: "ordered", name: "結單（建立訂單）", at: c?.ordered ?? null, sub: last && cur >= 3 ? `${SYS_LABEL[last.sys]} 訂單流水號 ${last.orderId}` : "客人按「確認下單」後" },
     { key: "shipped", name: "寄出通知", at: s === "shipped" ? d.stageAt : null, sub: s === "shipped" ? "已傳寄出通知與託運單" : "印託運單後在訂單頁按通知" },
   ];
   return list.map((x, i) => ({ ...x, state: i < cur ? "done" : i === cur ? "now" : "todo" }));
@@ -538,7 +538,7 @@ function Info({ d, busy, act }: { d: CustomerDetail; busy: string; act: (a: stri
             <div key={`${o.sys}${o.orderId}`} className="rounded-[10px] border border-line px-3 py-2.5 text-sm">
               <div className="flex items-center gap-2">
                 <b>
-                  {SYS_LABEL[o.sys]} No.{o.orderId}
+                  {SYS_LABEL[o.sys]} 訂單流水號 {o.orderId}
                 </b>
                 <span className="ml-auto">
                   {o.state ? (

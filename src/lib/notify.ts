@@ -28,7 +28,7 @@ export async function notifyShipped(sys: Sys, orderId: number) {
     throw new NotifyError(`LINE 傳送失敗：${e instanceof Error ? e.message : e}`);
   }
   await NotifyLog.create({ sys, orderId, userId: uid, obts, images: imgs.length, ok: true });
-  await logMessage(uid, "model", `[寄出通知：${SYS_INFO[sys].label} No.${orderId} 已寄出，託運單號 ${obts.join("、")}]`);
+  await logMessage(uid, "model", `[寄出通知：${SYS_INFO[sys].label} 訂單流水號 ${orderId} 已寄出，託運單號 ${obts.join("、")}]`);
   // 客人還在「已下單」才改成已寄出（已經開始問下一筆的不動）
   await LineUser.updateOne({ _id: uid, stage: "ordered" }, { $set: { stage: "shipped", stageAt: new Date() } });
   await markNotified(sys, orderId, obts).catch((e) => console.error("markNotified", e));

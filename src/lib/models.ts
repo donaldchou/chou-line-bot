@@ -238,11 +238,17 @@ export interface QaItemDoc {
   a: string;
   /** 客人問到這題時也通知農場（需要真人跟進） */
   notify: boolean;
+  /** 一起傳給客人的照片（ll3 檔名，見 ll3-file.ts），各區最多 10 張 */
+  productPhotos: string[];
+  pricePhotos: string[];
+  /** text＝只傳文字、photo＝只傳照片、text_photo＝先文字再照片、photo_text＝先照片再文字 */
+  sendMode: QaSendMode;
   active: boolean;
   createdAt: Date;
   updatedAt: Date;
   updatedBy?: string;
 }
+export type QaSendMode = "text" | "photo" | "text_photo" | "photo_text";
 const QaItemSchema = new Schema<QaItemDoc>(
   {
     _id: { type: String, required: true },
@@ -251,6 +257,9 @@ const QaItemSchema = new Schema<QaItemDoc>(
     alt: { type: String, default: "" },
     a: { type: String, required: true },
     notify: { type: Boolean, default: false },
+    productPhotos: { type: [String], default: [] },
+    pricePhotos: { type: [String], default: [] },
+    sendMode: { type: String, default: "text" },
     active: { type: Boolean, default: true },
     createdAt: { type: Date, default: () => new Date() },
     updatedAt: { type: Date, default: () => new Date() },

@@ -22,7 +22,7 @@ export interface FunctionDecl {
 }
 export type ToolHandler = (args: Record<string, unknown>) => Promise<object>;
 
-async function generate(system: string, contents: Content[], tools: FunctionDecl[], deadline: number) {
+async function generate(system: string, contents: Content[], tools: FunctionDecl[], deadline: number, afterTools: boolean) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("請設定 GEMINI_API_KEY");
   let lastError = "";
@@ -58,6 +58,8 @@ async function generate(system: string, contents: Content[], tools: FunctionDecl
       }
       const content = data?.candidates?.[0]?.content as Content | undefined;
       if (!content?.parts?.length) {
+        // 已經呼叫過函式（例如只傳照片），模型正常結束、不再打字 → 沒有文字也算完成
+        if (afterTools && data?.candidates?.[0]?.finishReason === "STOP") return { role: "model" as const, parts: [] };
         lastError = `${model}: empty response (${data?.candidates?.[0]?.finishReason ?? "?"})`;
         continue;
       }
@@ -76,7 +78,8 @@ export async function chat(system: string, contents: Content[], tools: FunctionD
   const convo = [...contents];
   const deadline = Date.now() + CHAT_BUDGET;
   for (let round = 0; round < 5; round++) {
-    const out = await generate(system, convo, tools, deadline);
+    const out = await generate(system, convo, tools, deadline, round > 0);
+    if (!out.parts.length) return "";
     convo.push(out);
     const calls = out.parts.filter((p) => p.functionCall);
     if (!calls.length) {

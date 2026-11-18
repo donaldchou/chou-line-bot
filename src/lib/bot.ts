@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { connectDB } from "./mongodb";
-import { AlertLog, ChatMessage, LineUser, OrderDraft, WebhookEvent, type LineUserDoc, type OrderInput } from "./models";
+import {
+  AlertLog,
+  ChatMessage,
+  LineUser,
+  OrderDraft,
+  QaItem,
+  WebhookEvent,
+  type LineUserDoc,
+  type OrderInput,
+  type QaItemDoc,
+  type QaSendMode,
+} from "./models";
 import { botPaused, logMessage, previewText, setStage } from "./progress";
 import { getProfile, imageMsg, send, showLoading, textMsg, withQuickReply, type LineMessage, type QuickItem } from "./line";
 import { chat, type Content, type FunctionDecl, type ToolHandler } from "./gemini";
@@ -18,10 +29,10 @@ import {
   type OrderInfo,
   type Sys,
 } from "./ll3";
-import { confirmCard, deliveryText, orderCarousel, payText, productCarousel, successCard } from "./flex";
+import { confirmCard, deliveryText, orderCarousel, payText, photoAlbum, productCarousel, successCard } from "./flex";
 import { imgSig } from "./sign";
 import { CAP_LABEL, capReplies, checkCapacity, productCaps } from "./capacity";
-import { qaPromptText } from "./qa";
+import { photoSummary, qaPromptText, sendsPhotos } from "./qa";
 
 const HISTORY = 15;
 const DRAFT_DAYS = 3;
@@ -138,6 +149,19 @@ interface Turn {
   flagged: boolean;
   /** 這一輪工具遇到的系統錯誤（訂單系統連不上、試算失敗…） */
   toolErrors: string[];
+  /** 問答附的照片（send_qa_photos）：mode 決定跟文字的先後 */
+  qaPhotos: { mode: QaSendMode; msgs: LineMessage[] } | null;
+}
+
+/** 問答照片的網址（LINE 和後台都經機器人讀 ll3） */
+export const qaPhotoUrl = (name: string) => `${baseUrl()}/api/qa-photo/${name}`;
+
+/** 一則問答要傳的照片訊息：產品照片、價格照片各一則相簿 */
+export function qaPhotoMessages(i: Pick<QaItemDoc, "productPhotos" | "pricePhotos">) {
+  return [
+    ...(i.productPhotos?.length ? [photoAlbum("產品照片", i.productPhotos.map(qaPhotoUrl))] : []),
+    ...(i.pricePhotos?.length ? [photoAlbum("價格照片", i.pricePhotos.map(qaPhotoUrl))] : []),
+  ];
 }
 
 /** 通知農場：客戶列表亮提醒＋留紀錄（總覽「機器人表現」、問答管理「答不出來的問題」用） */
@@ -172,6 +196,11 @@ export const TOOLS: FunctionDecl[] = [
       },
       required: ["product"],
     },
+  },
+  {
+    name: "send_qa_photos",
+    description: "傳常見問題附的照片（產品照片、價格照片）給客人。只有常見問題裡註明要呼叫的題目才用，qa_id 照抄。",
+    parameters: { type: "object", properties: { qa_id: { type: "string" } }, required: ["qa_id"] },
   },
   {
     name: "prepare_order",
@@ -410,6 +439,15 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
       };
     },
 
+    async send_qa_photos(a) {
+      const i = await QaItem.findOne({ _id: str(a.qa_id), active: true }).lean<QaItemDoc>();
+      if (!i || !sendsPhotos(i)) return { error: "這題沒有照片" };
+      if (t.qaPhotos) return { ok: true, note: "這一輪已經傳過照片了，一次只能傳一題的照片" };
+      t.qaPhotos = { mode: i.sendMode, msgs: qaPhotoMessages(i) };
+      t.notes.push(`[已傳送照片：${photoSummary(i)}（問答：${i.q}）]`);
+      return { ok: true, note: i.sendMode === "photo" ? "照片已傳，這題不要再打字回答" : "照片會跟你的回答一起傳給客人" };
+    },
+
     async set_quick_replies(a) {
       const opts = (Array.isArray(a.options) ? a.options : []).map((x) => String(x).slice(0, 20)).filter(Boolean).slice(0, 6);
       t.quick = opts.map((label) => ({ label }));
@@ -446,18 +484,19 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   if (botPaused(user)) return;
   void showLoading(userId, 30);
 
-  const t: Turn = { user, text, out: [], quick: [], notes: [], flagged: false, toolErrors: [] };
+  const t: Turn = { user, text, out: [], quick: [], notes: [], flagged: false, toolErrors: [], qaPhotos: null };
   let answer = "";
   let failed = "";
+  const sentSomething = () => t.out.length > 0 || !!t.qaPhotos;
   try {
     const faq = await qaPromptText().catch((e) => (console.error("qaPromptText", e), ""));
     answer = await chat(systemPrompt(new Date(), user.displayName, faq), await history(userId), TOOLS, handlers(t));
   } catch (e) {
     console.error("chat", e);
     failed = e instanceof Error ? e.message : String(e);
-    answer = t.out.length ? "" : SORRY;
+    answer = sentSomething() ? "" : SORRY;
   }
-  if (!answer && !t.out.length) answer = SORRY;
+  if (!answer && !sentSomething()) answer = SORRY;
 
   // 保險：機器人跟客人說「已請老闆處理」，或系統出錯沒回答到，但沒有呼叫 flag_customer → 一定要通知農場
   if (!t.flagged) {
@@ -472,7 +511,11 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
     if (why) await raiseAlert(t, "human", why).catch((e) => console.error("raiseAlert", e));
   }
 
-  const msgs: LineMessage[] = [...(answer ? [textMsg(answer)] : []), ...t.out];
+  // 問答照片：先照片再文字／只傳照片（這時的文字只會是回答別的事）→ 照片在前；其他 → 文字在前
+  const text_ = answer ? [textMsg(answer)] : [];
+  const photos = t.qaPhotos?.msgs ?? [];
+  const photoFirst = t.qaPhotos?.mode === "photo_text" || t.qaPhotos?.mode === "photo";
+  const msgs: LineMessage[] = [...(photoFirst ? [...photos, ...text_] : [...text_, ...photos]), ...t.out];
   msgs[msgs.length - 1] = withQuickReply(msgs[msgs.length - 1], t.quick);
   await send(userId, replyToken, msgs);
   await saveMsg(userId, "model", [answer, ...t.notes].filter(Boolean).join("\n"));
@@ -537,7 +580,7 @@ async function confirmOrder(user: LineUserDoc, ref: string, replyToken: string) 
     const old = await OrderDraft.findOne({ _id: ref, userId }).lean();
     const msg =
       old?.status === "created"
-        ? `這筆訂單已經成立囉（${SYS_INFO[old.sys].label} No.${old.orderId}），不用再按一次。`
+        ? `這筆訂單已經成立囉（${SYS_INFO[old.sys].label} 訂單流水號 ${old.orderId}），不用再按一次。`
         : old?.status === "creating"
           ? "訂單正在建立中，請稍候…"
           : "這張確認卡已經失效（可能已修改過或超過 3 天），請再告訴我一次要訂的內容，我重新整理給您確認。";
@@ -562,7 +605,7 @@ async function confirmOrder(user: LineUserDoc, ref: string, replyToken: string) 
     await LineUser.updateOne({ _id: userId }, { $set: { lastOrderAt: new Date(), interest: null, followups: 0, lastFollowupAt: null } });
     await setStage(userId, "ordered", { sys: draft.sys });
     await send(userId, replyToken, [successCard(draft, r.orderId)]);
-    await saveMsg(userId, "model", `[訂單已成立：${SYS_INFO[draft.sys].label} No.${r.orderId}，總金額 ${draft.quote.total} 元，已傳送下單完成卡]`);
+    await saveMsg(userId, "model", `[訂單已成立：${SYS_INFO[draft.sys].label} 訂單流水號 ${r.orderId}，總金額 ${draft.quote.total} 元，已傳送下單完成卡]`);
   } catch (e) {
     const closed = e instanceof Ll3Error && e.message === "closed";
     await OrderDraft.updateOne({ _id: ref }, { $set: { status: closed ? "cancelled" : "pending", error: String(e) } });

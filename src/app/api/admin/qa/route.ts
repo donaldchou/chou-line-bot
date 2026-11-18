@@ -1,4 +1,4 @@
-import { handleError, HttpError, readJson, requireAdmin, requirePage } from "@/lib/auth";
+import { assertCode, handleError, HttpError, readJson, requireAdmin, requirePage } from "@/lib/auth";
 import { FIXED_RULES } from "@/lib/knowledge";
 import { deleteItem, linkAlert, parseDraft, QaError, qaPage, saveCategories, saveItem, setActive } from "@/lib/qa";
 import { replyCustomer } from "@/lib/qa-answer";
@@ -18,7 +18,8 @@ export async function GET(req: Request) {
 }
 
 /**
- * POST { action: "save", id?, cat, q, alt, a, notify, alertId?, reply?, replyText? }
+ * 都要驗證碼（header x-verify-code，或後台解鎖期間）。
+ * POST { action: "save", id?, cat, q, alt, a, notify, productPhotos, pricePhotos, sendMode, alertId?, reply?, replyText? }
  *      新增／修改問答；從「答不出來的問題」來的會記下對應，reply＝順便用 LINE 回覆那位客人
  * POST { action: "toggle", id, active }
  * POST { action: "delete", id }
@@ -28,6 +29,7 @@ export async function POST(req: Request) {
   try {
     const admin = await requireAdmin(req);
     const body = await readJson(req);
+    await assertCode(req, admin, body.action === "delete" ? "刪除" : body.action === "save" && !body.id ? "新增" : "修改");
     switch (body.action) {
       case "save": {
         if (body.id !== undefined && !isQaId(body.id)) throw new HttpError(400, "id 不對");

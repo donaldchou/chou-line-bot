@@ -71,6 +71,26 @@ export function productCarousel(sys: Sys, products: { p: Product; img: string | 
   return flex(`${SYS_INFO[sys].label}產品介紹`, { type: "carousel", contents: bubbles });
 }
 
+/** 問答的照片：一區一則可左右滑的相簿，整張照片不裁切，點了看大圖 */
+export function photoAlbum(title: string, urls: string[]) {
+  const list = urls.slice(0, 12);
+  const bubbles = list.map((url, i) => ({
+    type: "bubble",
+    size: "kilo",
+    hero: { type: "image", url, size: "full", aspectRatio: "3:4", aspectMode: "fit", backgroundColor: "#F3F4F1", action: { type: "uri", uri: url } },
+    body: {
+      type: "box",
+      layout: "horizontal",
+      paddingAll: "10px",
+      contents: [
+        { type: "text", text: title, size: "sm", weight: "bold", color: GREEN, flex: 0 },
+        { type: "text", text: list.length > 1 ? `${i + 1}／${list.length}　點照片看大圖` : "點照片看大圖", size: "xs", color: GREY, align: "end", gravity: "center" },
+      ],
+    },
+  }));
+  return flex(`${title}（${list.length} 張）`, { type: "carousel", contents: bubbles });
+}
+
 /** 5. 確認訂單卡 */
 export function confirmCard(d: OrderDraftDoc) {
   const x = d.data;
@@ -113,7 +133,7 @@ export function confirmCard(d: OrderDraftDoc) {
 /** 5. 下單完成卡 */
 export function successCard(d: OrderDraftDoc, orderId: number) {
   const q = d.quote;
-  return flex(`訂購成功！訂單編號 No.${orderId}`, {
+  return flex(`訂購成功！訂單流水號 ${orderId}`, {
     type: "bubble",
     header: header("訂購成功，謝謝您！", GREEN),
     body: {
@@ -121,7 +141,7 @@ export function successCard(d: OrderDraftDoc, orderId: number) {
       layout: "vertical",
       spacing: "sm",
       contents: [
-        row("訂單編號", `${SYS_INFO[d.sys].label} No.${orderId}`, { bold: true, size: "md" }),
+        row("訂單流水號", `${SYS_INFO[d.sys].label} ${orderId}`, { bold: true, size: "md" }),
         row("商品", q.lines.map((l) => `${l.name} × ${l.qty}`).join("、")),
         row("總金額", `${money(q.total)}（${payText(d.data.pay)}）`),
         sep,
@@ -159,7 +179,7 @@ export function orderCarousel(list: { sys: Sys; o: OrderInfo }[]) {
             type: "box",
             layout: "horizontal",
             contents: [
-              { type: "text", text: `${SYS_INFO[sys].label} No.${o.id}`, weight: "bold", size: "md", flex: 1 },
+              { type: "text", text: `${SYS_INFO[sys].label} 訂單流水號 ${o.id}`, weight: "bold", size: "md", flex: 1 },
               { type: "text", text: badge[0], color: badge[1], weight: "bold", size: "sm", align: "end", flex: 0 },
             ],
           },
@@ -193,7 +213,7 @@ export function shippedCard(sys: Sys, o: OrderInfo, hasImages: boolean) {
       layout: "vertical",
       spacing: "sm",
       contents: [
-        row("訂單編號", `No.${o.id}`, { bold: true }),
+        row("訂單流水號", `${o.id}`, { bold: true }),
         row("商品", o.items.map((i) => `${i.name} × ${i.qty}`).join("、")),
         row("收件者", o.recipient),
         row("宅配", "黑貓宅急便・預計明天送達"),

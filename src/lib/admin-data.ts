@@ -172,7 +172,7 @@ function toRow(u: LineUserDoc, now: Date, agg?: Agg, pend?: OrderDraftDoc, vip: 
     prod = linesText(pend);
     extra = `NT$ ${pend.quote.total.toLocaleString()}${u.followups ? ` · 已關心 ${u.followups} 次` : ""}`;
   }
-  if ((stage === "ordered" || stage === "shipped") && agg?.lastNo) extra = `${label(agg.lastSys)} No.${agg.lastNo}`;
+  if ((stage === "ordered" || stage === "shipped") && agg?.lastNo) extra = `${label(agg.lastSys)} 訂單流水號 ${agg.lastNo}`;
   if (stage === "lost") extra = `已關心 ${u.followups} 次`;
   return {
     id: u._id,
@@ -266,7 +266,7 @@ export async function overview(now = new Date()) {
       kind: "notify",
       userId: x.o.line?.uid ?? null,
       name: byId.get(x.o.line?.uid ?? "")?.name ?? x.o.line?.name ?? x.o.buyer,
-      text: `${label(x.sys)} No.${x.o.id} 已印託運單，還沒傳 LINE 寄出通知`,
+      text: `${label(x.sys)} 訂單流水號 ${x.o.id} 已印託運單，還沒傳 LINE 寄出通知`,
       at: ll3Time(printed)?.toISOString() ?? null,
       sys: x.sys,
       orderId: x.o.id,

@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     const id = typeof body.id === "string" && /^[\w-]{1,40}$/.test(body.id) ? body.id : undefined;
     const draft = await parseDraft(body);
     const faq = await qaPromptText({ id, draft });
-    return Response.json(await previewAnswer(question, faq, { followup: body.followup === true }));
+    return Response.json(await previewAnswer(question, faq, { followup: body.followup === true, draft }));
   } catch (err) {
     if (err instanceof QaError) return Response.json({ error: err.message }, { status: 400 });
     return handleError(err);

@@ -1,7 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { connectDB } from "./mongodb";
-import { AdminSetting, AlertLog, LineUser, QaCategory, QaItem, type QaCategoryDoc, type QaItemDoc } from "./models";
+import { AdminSetting, AlertLog, LineUser, QaCategory, QaItem, type QaCategoryDoc, type QaItemDoc, type QaSendMode } from "./models";
 import { SEED_CATEGORIES, SEED_QA } from "./knowledge";
+import { deletePhoto, PHOTO_NAME } from "./ll3-file";
+
+/** 試問時還沒存檔的那則問答，send_qa_photos 用這個 id */
+export const DRAFT_ID = "draft";
 
 /* 問答管理：機器人回答客人時參考的問答，存在資料庫，後台改了立刻生效 */
 
@@ -41,16 +45,44 @@ export interface QaDraft {
   alt: string;
   a: string;
   notify: boolean;
+  productPhotos: string[];
+  pricePhotos: string[];
+  sendMode: QaSendMode;
 }
+
+export const MAX_PHOTOS = 10;
+export const SEND_MODES: QaSendMode[] = ["text", "photo", "text_photo", "photo_text"];
 
 const newId = () => randomBytes(6).toString("hex");
 const s = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
+const photoList = (v: unknown, label: string) => {
+  const list = [...new Set((Array.isArray(v) ? v : []).map(String))];
+  if (list.some((n) => !PHOTO_NAME.test(n))) throw new QaError(`${label}的檔名不對`);
+  if (list.length > MAX_PHOTOS) throw new QaError(`${label}最多 ${MAX_PHOTOS} 張`);
+  return list;
+};
+export const photoCount = (d: Pick<QaDraft, "productPhotos" | "pricePhotos">) => (d.productPhotos?.length ?? 0) + (d.pricePhotos?.length ?? 0);
+/** 「產品照片 3 張、價格照片 1 張」 */
+export const photoSummary = (d: Pick<QaDraft, "productPhotos" | "pricePhotos">) =>
+  [d.productPhotos?.length && `產品照片 ${d.productPhotos.length} 張`, d.pricePhotos?.length && `價格照片 ${d.pricePhotos.length} 張`].filter(Boolean).join("、");
+/** 這題會傳照片（有照片、而且不是「只傳文字」） */
+export const sendsPhotos = (d: Pick<QaDraft, "productPhotos" | "pricePhotos" | "sendMode">) => photoCount(d) > 0 && (d.sendMode ?? "text") !== "text";
 
 /** 檢查並整理後台送來的問答 */
 export async function parseDraft(body: Record<string, unknown>): Promise<QaDraft> {
-  const d: QaDraft = { cat: s(body.cat, 40), q: s(body.q, 200), alt: s(body.alt, 300), a: s(body.a, 2000), notify: body.notify === true };
+  const d: QaDraft = {
+    cat: s(body.cat, 40),
+    q: s(body.q, 200),
+    alt: s(body.alt, 300),
+    a: s(body.a, 2000),
+    notify: body.notify === true,
+    productPhotos: photoList(body.productPhotos, "產品照片"),
+    pricePhotos: photoList(body.pricePhotos, "價格照片"),
+    sendMode: SEND_MODES.includes(body.sendMode as QaSendMode) ? (body.sendMode as QaSendMode) : "text",
+  };
   if (!d.q) throw new QaError("請填「客人會這樣問」");
-  if (!d.a) throw new QaError("請填回答");
+  if (d.sendMode !== "text" && !photoCount(d)) throw new QaError("選了傳照片，請至少上傳一張照片，或改選「只傳文字」");
+  if (!d.a && d.sendMode !== "photo") throw new QaError("請填回答");
   await connectDB();
   if (!(await QaCategory.exists({ _id: d.cat }))) throw new QaError("請選分類");
   return d;
@@ -68,10 +100,10 @@ async function sortedCats() {
 export async function qaPromptText(override?: { id?: string; draft: QaDraft }) {
   await ensureSeed();
   const [cats, items] = await Promise.all([sortedCats(), QaItem.find({ active: true }).sort({ createdAt: 1 }).lean<QaItemDoc[]>()]);
-  let list: Pick<QaItemDoc, "cat" | "q" | "alt" | "a" | "notify">[] = items;
+  let list: (QaDraft & { _id: string })[] = items;
   if (override) {
     list = items.filter((i) => i._id !== override.id);
-    list.push(override.draft);
+    list.push({ ...override.draft, _id: DRAFT_ID });
   }
   return cats
     .map((c) => {
@@ -79,7 +111,15 @@ export async function qaPromptText(override?: { id?: string; draft: QaDraft }) {
       if (!rows.length) return "";
       const body = rows
         .map((i) => {
-          const lines = [`- 客人問：${i.q}${i.alt ? `（也可能這樣問：${i.alt}）` : ""}`, `  回答重點：${i.a}`];
+          const lines = [`- 客人問：${i.q}${i.alt ? `（也可能這樣問：${i.alt}）` : ""}`];
+          if (i.a) lines.push(`  回答重點：${i.a}`);
+          if (sendsPhotos(i)) {
+            lines.push(
+              i.sendMode === "photo"
+                ? `  ※ 這題只傳照片：呼叫 send_qa_photos(qa_id="${i._id}")，這題不要再打字回答`
+                : `  ※ 回答這題時，同時呼叫 send_qa_photos(qa_id="${i._id}") 傳照片給客人參考`,
+            );
+          }
           if (i.notify) lines.push(`  ※ 回答這題後，同時呼叫 flag_customer(status="human", reason="客人問：${i.q}")`);
           return lines.join("\n");
         })
@@ -99,6 +139,9 @@ export interface QaView {
   alt: string;
   a: string;
   notify: boolean;
+  productPhotos: string[];
+  pricePhotos: string[];
+  sendMode: QaSendMode;
   active: boolean;
   updatedAt: string;
 }
@@ -136,7 +179,19 @@ export async function qaPage() {
     categories: cats.map<CatView>((c) => ({ id: c._id, name: c.name, count: items.filter((i) => i.cat === c._id).length })),
     items: items
       .sort((a, b) => (catOrder.get(a.cat) ?? 99) - (catOrder.get(b.cat) ?? 99))
-      .map<QaView>((i) => ({ id: i._id, cat: i.cat, q: i.q, alt: i.alt, a: i.a, notify: i.notify, active: i.active, updatedAt: iso(i.updatedAt)! })),
+      .map<QaView>((i) => ({
+        id: i._id,
+        cat: i.cat,
+        q: i.q,
+        alt: i.alt,
+        a: i.a,
+        notify: i.notify,
+        productPhotos: i.productPhotos ?? [],
+        pricePhotos: i.pricePhotos ?? [],
+        sendMode: i.sendMode ?? "text",
+        active: i.active,
+        updatedAt: iso(i.updatedAt)!,
+      })),
     unanswered: logs.map<UnansweredView>((l) => ({
       id: String(l._id),
       userId: l.userId,
@@ -159,13 +214,24 @@ export async function saveItem(draft: QaDraft, by: string, id?: string) {
   await connectDB();
   const now = new Date();
   if (id) {
-    const r = await QaItem.updateOne({ _id: id }, { $set: { ...draft, updatedAt: now, updatedBy: by } });
-    if (!r.matchedCount) throw new QaError("找不到這則問答（可能已被刪除）");
+    const old = await QaItem.findOneAndUpdate({ _id: id }, { $set: { ...draft, updatedAt: now, updatedBy: by } }).lean<QaItemDoc>();
+    if (!old) throw new QaError("找不到這則問答（可能已被刪除）");
+    await cleanupPhotos(photosOf(old));
     return id;
   }
   const _id = newId();
   await QaItem.create({ _id, ...draft, active: true, createdAt: now, updatedAt: now, updatedBy: by });
   return _id;
+}
+
+const photosOf = (i: Partial<Pick<QaItemDoc, "productPhotos" | "pricePhotos">>) => [...(i.productPhotos ?? []), ...(i.pricePhotos ?? [])];
+
+/** 刪掉 ll3 上沒有任何問答在用的照片（複製的問答會共用同一張，所以要先查） */
+export async function cleanupPhotos(names: string[]) {
+  for (const n of new Set(names)) {
+    if (await QaItem.exists({ $or: [{ productPhotos: n }, { pricePhotos: n }] })) continue;
+    await deletePhoto(n).catch((e) => console.error("deletePhoto", n, e));
+  }
 }
 
 export async function setActive(id: string, active: boolean, by: string) {
@@ -176,8 +242,9 @@ export async function setActive(id: string, active: boolean, by: string) {
 
 export async function deleteItem(id: string) {
   await connectDB();
-  const r = await QaItem.deleteOne({ _id: id });
-  if (!r.deletedCount) throw new QaError("找不到這則問答");
+  const old = await QaItem.findOneAndDelete({ _id: id }).lean<QaItemDoc>();
+  if (!old) throw new QaError("找不到這則問答");
+  await cleanupPhotos(photosOf(old));
 }
 
 /** 分類：整份清單照順序送來；沒有 id 的是新增，原本有、清單裡沒有的是刪除（裡面還有問答就不能刪） */

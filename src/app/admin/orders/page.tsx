@@ -32,15 +32,15 @@ export default function OrdersPage() {
   const rows = d?.rows.filter((r) => filter === "all" || r.state === filter) ?? [];
 
   const notify = async (sys: string, orderId: number) => {
-    if (!confirm(`傳 LINE 寄出通知（含託運單照片）給 ${SYS_LABEL[sys]} No.${orderId} 的客人？`)) return;
+    if (!confirm(`傳 LINE 寄出通知（含託運單照片）給 ${SYS_LABEL[sys]} 訂單流水號 ${orderId} 的客人？`)) return;
     setBusy(`${sys}-${orderId}`);
     setMsg(null);
     try {
       const r = await api<{ waybills: number; images: number }>("/api/admin/orders", { json: { sys, orderId } });
-      setMsg({ ok: true, text: `已通知 No.${orderId}：託運單 ${r.waybills} 張、照片 ${r.images} 張` });
+      setMsg({ ok: true, text: `已通知訂單流水號 ${orderId}：託運單 ${r.waybills} 張、照片 ${r.images} 張` });
       await reload();
     } catch (e) {
-      setMsg({ ok: false, text: `No.${orderId} 通知失敗：${e instanceof Error ? e.message : e}` });
+      setMsg({ ok: false, text: `訂單流水號 ${orderId} 通知失敗：${e instanceof Error ? e.message : e}` });
     } finally {
       setBusy("");
     }
@@ -118,7 +118,7 @@ export default function OrdersPage() {
             {rows.map((r) => (
               <tr key={r.key} className="border-b border-line2 align-middle text-sm">
                 <td className="whitespace-nowrap px-3.5 py-3">
-                  <b>{r.orderId ? `${SYS_LABEL[r.sys]} No.${r.orderId}` : "（尚未建立）"}</b>
+                  <b>{r.orderId ? `${SYS_LABEL[r.sys]} 訂單流水號 ${r.orderId}` : "（尚未建立）"}</b>
                   <br />
                   <span className="text-xs text-mute">{mdhm(r.at)}</span>
                 </td>
