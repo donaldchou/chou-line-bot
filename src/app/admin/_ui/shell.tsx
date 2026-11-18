@@ -11,7 +11,7 @@ import { logout, useMe } from "./me";
 
 type Item = { href: string; label: string; icon: IconName };
 
-const ICON: Record<string, IconName> = { overview: "grid", customers: "users", chat: "chat", push: "send", orders: "box", capacity: "sliders" };
+const ICON: Record<string, IconName> = { overview: "grid", customers: "users", chat: "chat", push: "send", orders: "box", capacity: "sliders", qa: "help" };
 
 const NAV: { group: string; items: Item[] }[] = [...new Set(USER_PAGES.map((p) => p.group))].map((group) => ({
   group,

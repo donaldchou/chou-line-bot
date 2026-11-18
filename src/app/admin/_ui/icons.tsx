@@ -108,6 +108,15 @@ const P: Record<string, React.ReactNode> = {
       <path d="M1 14h6M9 8h6M17 16h6" />
     </>
   ),
+  help: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.5 9a2.5 2.5 0 0 1 4.9.8c0 1.7-2.4 2.2-2.4 3.7M12 17h.01" />
+    </>
+  ),
+  edit: <path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" />,
+  arrowUp: <path d="M12 19V5M6 11l6-6 6 6" />,
+  arrowDown: <path d="M12 5v14M6 13l6 6 6-6" />,
   refresh: (
     <>
       <path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" />

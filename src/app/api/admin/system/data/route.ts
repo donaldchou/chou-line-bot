@@ -14,6 +14,8 @@ const COLLS = {
   alertLogs: { label: "需要處理紀錄（轉真人）", sort: { at: -1 }, search: ["userId", "text", "kind"] },
   broadcasts: { label: "群發訊息", sort: { scheduledAt: -1 }, search: ["text", "status", "createdBy"] },
   productSettings: { label: "接單設定（各規格）", sort: { _id: 1 }, search: ["_id", "status"] },
+  qaItems: { label: "問答", sort: { createdAt: -1 }, search: ["q", "alt", "a", "cat"] },
+  qaCategories: { label: "問答分類", sort: { sort: 1 }, search: ["_id", "name"] },
   webhookEvents: { label: "LINE 事件去重（2 天自動清除）", sort: { at: -1 }, search: ["_id"] },
   adminSettings: { label: "後台設定", sort: { _id: 1 }, search: ["_id"] },
 } as const;

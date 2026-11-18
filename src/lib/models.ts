@@ -180,6 +180,11 @@ export interface AlertLogDoc {
   /** reply＝真人回覆、resolve＝按「已處理」 */
   how?: "reply" | "resolve";
   by?: string;
+  /** 客人當時傳的原話（2026-11-18 起才有） */
+  question?: string;
+  /** 答不出來的問題：在「問答管理」加入問答後，對應的問答 */
+  qaId?: string | null;
+  qaAt?: Date | null;
 }
 const AlertLogSchema = new Schema<AlertLogDoc>(
   {
@@ -190,13 +195,70 @@ const AlertLogSchema = new Schema<AlertLogDoc>(
     resolvedAt: { type: Date, default: null },
     how: String,
     by: String,
+    question: String,
+    qaId: { type: String, default: null },
+    qaAt: { type: Date, default: null },
   },
   { versionKey: false },
 );
 AlertLogSchema.index({ at: -1 });
 AlertLogSchema.index({ userId: 1, resolvedAt: 1 });
+AlertLogSchema.index({ kind: 1, qaId: 1, at: -1 });
 export const AlertLog =
   (models.AlertLog as Model<AlertLogDoc>) || model<AlertLogDoc>("AlertLog", AlertLogSchema, "alertLogs");
+
+/** 問答分類（_id：預設的 general/kaki/peach，或新增時隨機產生） */
+export interface QaCategoryDoc {
+  _id: string;
+  name: string;
+  sort: number;
+  createdAt: Date;
+}
+const QaCategorySchema = new Schema<QaCategoryDoc>(
+  {
+    _id: { type: String, required: true },
+    name: { type: String, required: true },
+    sort: { type: Number, default: 0 },
+    createdAt: { type: Date, default: () => new Date() },
+  },
+  { versionKey: false },
+);
+export const QaCategory =
+  (models.QaCategory as Model<QaCategoryDoc>) || model<QaCategoryDoc>("QaCategory", QaCategorySchema, "qaCategories");
+
+/** 問答（機器人回答時參考） */
+export interface QaItemDoc {
+  _id: string;
+  cat: string;
+  /** 客人會這樣問 */
+  q: string;
+  /** 其他問法（逗號分開） */
+  alt: string;
+  /** 機器人依這段回答 */
+  a: string;
+  /** 客人問到這題時也通知農場（需要真人跟進） */
+  notify: boolean;
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  updatedBy?: string;
+}
+const QaItemSchema = new Schema<QaItemDoc>(
+  {
+    _id: { type: String, required: true },
+    cat: { type: String, required: true },
+    q: { type: String, required: true },
+    alt: { type: String, default: "" },
+    a: { type: String, required: true },
+    notify: { type: Boolean, default: false },
+    active: { type: Boolean, default: true },
+    createdAt: { type: Date, default: () => new Date() },
+    updatedAt: { type: Date, default: () => new Date() },
+    updatedBy: String,
+  },
+  { versionKey: false },
+);
+export const QaItem = (models.QaItem as Model<QaItemDoc>) || model<QaItemDoc>("QaItem", QaItemSchema, "qaItems");
 
 /** 接單設定：每個品項（_id = "sys:貨號"） */
 export interface ProductSettingDoc {

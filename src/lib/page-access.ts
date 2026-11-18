@@ -10,6 +10,7 @@ export const USER_PAGES = [
   { key: "push", label: "群發訊息", group: "客戶", href: "/admin/push" },
   { key: "orders", label: "LINE 訂單", group: "訂單", href: "/admin/orders" },
   { key: "capacity", label: "接單設定", group: "訂單", href: "/admin/capacity" },
+  { key: "qa", label: "問答管理", group: "機器人", href: "/admin/qa" },
 ] as const;
 
 export type PageKey = (typeof USER_PAGES)[number]["key"];

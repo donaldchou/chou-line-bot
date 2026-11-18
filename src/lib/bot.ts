@@ -21,6 +21,7 @@ import {
 import { confirmCard, deliveryText, orderCarousel, payText, productCarousel, successCard } from "./flex";
 import { imgSig } from "./sign";
 import { CAP_LABEL, capReplies, checkCapacity, productCaps } from "./capacity";
+import { qaPromptText } from "./qa";
 
 const HISTORY = 15;
 const DRAFT_DAYS = 3;
@@ -128,12 +129,14 @@ ${open.length ? `\n現在開放訂購：${open.join("、")}\n` : ""}
 
 interface Turn {
   user: LineUserDoc;
+  /** 客人這次傳的訊息 */
+  text: string;
   out: LineMessage[];
   quick: QuickItem[];
   notes: string[];
 }
 
-const TOOLS: FunctionDecl[] = [
+export const TOOLS: FunctionDecl[] = [
   {
     name: "get_products",
     description: "查詢甜柿或水蜜桃目前的規格、價格與是否開放訂購。報價或回答能不能訂之前一定要先呼叫。",
@@ -367,7 +370,8 @@ function handlers(t: Turn): Record<string, ToolHandler> {
         const at = new Date();
         await LineUser.updateOne({ _id: t.user._id }, { $set: { alert: { kind: a.status, text: text.slice(0, 200), at } } });
         // 留紀錄：總覽的「機器人表現」用
-        await AlertLog.create({ userId: t.user._id, kind: a.status, text: text.slice(0, 200), at });
+        // question＝客人原話：後台「問答管理」的「答不出來的問題」顯示用
+        await AlertLog.create({ userId: t.user._id, kind: a.status, text: text.slice(0, 200), question: t.text.slice(0, 500), at });
         t.notes.push(`[已通知農場主人：${text}]`);
         return { ok: true, note: "已通知農場主人，請告訴客人農場會再跟他聯絡，急的話可以直接打電話" };
       }
@@ -391,10 +395,11 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   if (botPaused(user)) return;
   void showLoading(userId, 30);
 
-  const t: Turn = { user, out: [], quick: [], notes: [] };
+  const t: Turn = { user, text, out: [], quick: [], notes: [] };
   let answer = "";
   try {
-    answer = await chat(systemPrompt(new Date(), user.displayName), await history(userId), TOOLS, handlers(t));
+    const faq = await qaPromptText().catch((e) => (console.error("qaPromptText", e), ""));
+    answer = await chat(systemPrompt(new Date(), user.displayName, faq), await history(userId), TOOLS, handlers(t));
   } catch (e) {
     console.error("chat", e);
     answer = t.out.length ? "" : SORRY;
