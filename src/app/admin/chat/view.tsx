@@ -402,7 +402,7 @@ function MobileProgress({ d, onInfo }: { d: CustomerDetail; onInfo: () => void }
   );
 }
 
-const DELIVERY: Record<string, string> = { AM: "早上 08～12 點", FM: "中午 12～18 點", NIGHT: "晚上 18～22 點" };
+const DELIVERY: Record<string, string> = { AM: "早上 08～13 點", FM: "中午 13～18 點", NIGHT: "晚上 18～22 點（已停用）" };
 const PAY: Record<string, string> = { cod: "貨到付款", atm: "匯款或 ATM 轉帳", card: "刷卡繳費" };
 const ORDER_STATE: Record<string, { name: string; bg: string; fg: string }> = {
   ord: { name: "已下單", bg: "#DFF2E7", fg: "#17613E" },

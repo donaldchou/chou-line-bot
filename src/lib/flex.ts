@@ -9,7 +9,7 @@ const ORANGE = "#E07B2A";
 const GREY = "#4A5563";
 export const TRACK_URL = "https://www.t-cat.com.tw/inquire/trace.aspx";
 
-const DELIVERY = { AM: "早上 08～12 點", FM: "中午 12～18 點", NIGHT: "晚上 18～22 點" } as const;
+const DELIVERY = { AM: "早上 08～13 點", FM: "中午 13～18 點", NIGHT: "晚上 18～22 點（已停用）" } as const;
 const PAY = { cod: "貨到付款", atm: "匯款或 ATM 轉帳", card: "刷卡繳費" } as const;
 export const deliveryText = (d: keyof typeof DELIVERY) => DELIVERY[d];
 export const payText = (p: keyof typeof PAY) => PAY[p];
