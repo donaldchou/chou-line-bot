@@ -351,8 +351,14 @@ Case "create"
 		cRs("time") = Now
 		cRs("memo") = fMemo
 		On Error Resume Next
-		cRs("order_way") = "line訂購"
-		cRs("order_way_note") = SudaSafeLeft("LINE " & fLName, WAY_NOTE_MAX)
+		If LINE_SYS = "kaki" Then
+			'2026-11-18 甜柿：訂購方式「LINE機器人」，備註只放 LINE 名稱（way_config 的 WayEnsure 會加這個選項）
+			cRs("order_way") = "LINE機器人"
+			cRs("order_way_note") = SudaSafeLeft(fLName, WAY_NOTE_MAX)
+		Else
+			cRs("order_way") = "line訂購"
+			cRs("order_way_note") = SudaSafeLeft("LINE " & fLName, WAY_NOTE_MAX)
+		End If
 		Err.Clear
 		cRs.Update
 		If Err.Number = 0 Then

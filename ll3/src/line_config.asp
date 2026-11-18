@@ -171,6 +171,26 @@ Function LineOrderLink(conn, oid)
 	rs.Close
 End Function
 
+'「上次通知 時間（共 N 次）」／「尚未通知」（lk＝LineOrderLink 的結果）
+Function LineLastHtml(lk)
+	If IsNull(lk(2)) Or IsEmpty(lk(2)) Then
+		LineLastHtml = "<span style=""color:#999999"">尚未通知</span>"
+	Else
+		LineLastHtml = "<span style=""color:#666666"">上次通知 " & lk(2) & "（共 " & lk(3) & " 次）</span>"
+	End If
+End Function
+
+'非 ASCII 字元改成 &#N;（line_token.asp?info=1 回給 fetch，不受網頁編碼影響）
+Function LineAsciiHtml(s)
+	Dim i, c, r
+	r = ""
+	For i = 1 To Len(s)
+		c = Mid(s, i, 1)
+		If AscW(c) < 0 Or AscW(c) > 127 Then r = r & "&#" & (AscW(c) And &HFFFF&) & ";" Else r = r & c
+	Next
+	LineAsciiHtml = r
+End Function
+
 'vieworder_suda.asp：「LINE 通知客人寄出」區塊（已印單時顯示在黑貓宅配單區塊內）
 Sub LineNotifyBox(oid)
 	Dim conn, lk
@@ -181,11 +201,7 @@ Sub LineNotifyBox(oid)
 	Response.Write "<b style=""color:#06C755"">LINE 通知客人寄出</b>　"
 	If IsArray(lk) Then
 		Response.Write "LINE 客人：" & SudaHtml(lk(1))
-		If Not IsNull(lk(2)) Then
-			Response.Write "　<span style=""color:#666666"">上次通知 " & lk(2) & "（共 " & lk(3) & " 次）</span>"
-		Else
-			Response.Write "　<span style=""color:#999999"">尚未通知</span>"
-		End If
+		Response.Write "<br><span id=""line-notify-last"">" & LineLastHtml(lk) & "</span>"
 		Response.Write "<br><button type=""button"" id=""line-notify-btn"" style=""padding:4px 12px; margin-top:4px; cursor:pointer"" onclick=""lineNotify(" & CLng(oid) & ")"">傳 LINE 通知：已寄出＋託運單號＋託運單照片</button>"
 		Response.Write " <span id=""line-notify-msg"" style=""font-size:9pt""></span>"
 		Response.Write "<div style=""color:#999999; font-size:9pt"">會傳給客人：訂單已寄出、託運單號、託運單照片（已產生照片的才會附上）、黑貓查詢網址</div>"
@@ -203,7 +219,15 @@ Sub LineNotifyBox(oid)
 		Response.Write "  }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); }).then(function (x) {" & vbCrLf
 		Response.Write "    if (!x.ok || !x.j.ok) { fail('傳送失敗：' + (x.j && x.j.error || '')); return; }" & vbCrLf
 		Response.Write "    b.disabled = false; m.style.color = '#06A04A'; m.innerHTML = '已傳送（' + x.j.waybills + ' 張託運單，' + x.j.images + ' 張照片）';" & vbCrLf
+		Response.Write "    lineNotifyLast(id);" & vbCrLf
 		Response.Write "  })['catch'](function (e) { fail('傳送失敗：' + (e.message || e)); });" & vbCrLf
+		Response.Write "}" & vbCrLf
+		'傳送後重新讀取「上次通知」時間與次數（不用按 F5）
+		Response.Write "function lineNotifyLast(id) {" & vbCrLf
+		Response.Write "  fetch('line_token.asp?info=1&PROID=' + id + '&t=' + new Date().getTime(), { credentials: 'same-origin' }).then(function (r) { return r.text(); }).then(function (h) {" & vbCrLf
+		Response.Write "    h = String(h).replace(/^\s+|\s+$/g, '');" & vbCrLf
+		Response.Write "    if (h.indexOf('<span') === 0) document.getElementById('line-notify-last').innerHTML = h;" & vbCrLf
+		Response.Write "  })['catch'](function () {});" & vbCrLf
 		Response.Write "}" & vbCrLf
 		Response.Write "</script>"
 	Else
