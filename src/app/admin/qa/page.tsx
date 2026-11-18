@@ -20,7 +20,8 @@ const CAT_COLORS = [
   { bg: "#F1EDE4", fg: "#6B5320" },
 ];
 
-type Editing = { item?: QaView; alert?: UnansweredView };
+/** item=編輯；alert=從答不出來的問題加入；copy=複製一則問答來新增 */
+type Editing = { item?: QaView; alert?: UnansweredView; copy?: QaView };
 
 export default function QaPage() {
   const { data: d, error, reload } = usePoll<Data>("/api/admin/qa", 60_000);
@@ -204,6 +205,9 @@ export default function QaPage() {
                         <button type="button" className={smallBtn("pri")} onClick={() => setEditing({ item: i })}>
                           <Icon name="edit" size={16} /> 編輯
                         </button>
+                        <button type="button" className={smallBtn()} onClick={() => setEditing({ copy: i })}>
+                          <Icon name="plus" size={16} /> 複製
+                        </button>
                         <button
                           type="button"
                           className={smallBtn("danger")}
@@ -239,9 +243,10 @@ export default function QaPage() {
 
       {editing && d && (
         <Editor
-          key={editing.item?.id ?? editing.alert?.id ?? "new"}
+          key={editing.item?.id ?? editing.alert?.id ?? (editing.copy ? `copy-${editing.copy.id}` : "new")}
           editing={editing}
           cats={d.categories}
+          items={d.items}
           defaultCat={cat !== "all" ? cat : undefined}
           onCatsChanged={reload}
           onClose={() => setEditing(null)}
@@ -273,6 +278,7 @@ export default function QaPage() {
 function Editor({
   editing,
   cats,
+  items,
   defaultCat,
   onCatsChanged,
   onClose,
@@ -281,22 +287,32 @@ function Editor({
 }: {
   editing: Editing;
   cats: CatView[];
+  items: QaView[];
   defaultCat?: string;
   onCatsChanged: () => Promise<void>;
   onClose: () => void;
   onSaved: (msg: string) => Promise<void>;
   onReplyError: (e: string) => void;
 }) {
-  const { item, alert } = editing;
+  const { item, alert, copy } = editing;
+  const src = item ?? copy;
   const [f, setF] = useState({
-    cat: item?.cat ?? defaultCat ?? cats[0]?.id ?? "",
-    q: item?.q ?? alert?.question ?? "",
-    alt: item?.alt ?? "",
-    a: item?.a ?? "",
-    notify: item?.notify ?? false,
+    cat: src?.cat ?? defaultCat ?? cats[0]?.id ?? "",
+    q: item?.q ?? alert?.question ?? copy?.q ?? "",
+    alt: src?.alt ?? "",
+    a: src?.a ?? "",
+    notify: src?.notify ?? false,
   });
+  const [copiedFrom, setCopiedFrom] = useState(copy?.id ?? "");
+  // 從其他問答複製：帶入分類、其他問法、回答、通知設定；「客人原話」加入時保留客人的問題
+  const copyFrom = (id: string) => {
+    setCopiedFrom(id);
+    const s = items.find((x) => x.id === id);
+    if (!s) return;
+    set({ cat: s.cat, q: alert?.question || s.q, alt: s.alt, a: s.a, notify: s.notify });
+  };
   const [reply, setReply] = useState(!!alert);
-  const [ask, setAsk] = useState(alert?.question || alert?.reason || item?.q || "");
+  const [ask, setAsk] = useState(alert?.question || alert?.reason || src?.q || "");
   const [preview, setPreview] = useState<{ key: string; text: string; notes: string[] } | null>(null);
   const [trying, setTrying] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -372,7 +388,7 @@ function Editor({
   return (
     <Modal
       onClose={onClose}
-      title={item ? "編輯問答" : alert ? "加入問答" : "新增問答"}
+      title={item ? "編輯問答" : alert ? "加入問答" : copy ? "複製問答" : "新增問答"}
       wide
       footer={
         <>
@@ -392,6 +408,28 @@ function Editor({
             <br />
             {alert.question ? `「${alert.question}」` : alert.reason}
           </div>
+        )}
+
+        {!item && items.length > 0 && (
+          <Field label="從其他問答複製（選填）" hint={<span className="text-mute">選一則帶入內容，再改成新的問答；原本那則不會變。</span>}>
+            <select value={copiedFrom} onChange={(e) => copyFrom(e.target.value)} className={inputCls}>
+              <option value="">不複製，從空白開始</option>
+              {cats.map((c) => {
+                const list = items.filter((x) => x.cat === c.id);
+                return (
+                  list.length > 0 && (
+                    <optgroup key={c.id} label={c.name}>
+                      {list.map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.q}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )
+                );
+              })}
+            </select>
+          </Field>
         )}
 
         <div className="grid gap-3.5 sm:grid-cols-2">
