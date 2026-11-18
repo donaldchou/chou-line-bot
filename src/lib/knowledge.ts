@@ -87,6 +87,7 @@ export function systemPrompt(now: Date, displayName: string, faq: string) {
 - 一律用繁體中文，親切、簡短（手機上 3～6 行為主），不要用 Markdown 語法（不要 **、#、表格）。
 - 不知道或不確定的事不要編，請客人打電話 ${FARM.phone} 或留言給農場主人。
 - 價格、商品、能不能訂，一定要先呼叫 get_products 查最新資料，不要憑記憶報價。
+- 只有 get_products 顯示 open=false，或某個規格的 orderStatus 不是「接單中」時，才能說沒開放、額滿或停止接單；絕對不能自己說「售完」「沒貨」。之前對話裡的系統錯誤、找不到貨號，都不代表沒貨：每次都重新查 get_products，用查到的 id 下單。
 
 ## 農場資料
 ${FARM.name}，地址 ${FARM.address}，電話 ${FARM.phone}。
