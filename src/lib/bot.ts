@@ -267,8 +267,11 @@ export const TOOLS: FunctionDecl[] = [
   },
   {
     name: "lookup_orders",
-    description: "用訂購者姓名或電話查詢訂單（甜柿、水蜜桃都會查），系統會傳訂單卡片給客人。",
-    parameters: { type: "object", properties: { name: { type: "string" }, phone: { type: "string" } } },
+    description: "用訂購者姓名或電話查詢訂單，系統會傳訂單卡片給客人。客人有說要查甜柿或水蜜桃（例如剛按了「甜柿訂單」）就填 product，只查那一種；沒說就不填，兩種都查。",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string" }, phone: { type: "string" }, product: { type: "string", enum: ["kaki", "peach"], description: "kaki＝甜柿、peach＝水蜜桃" } },
+    },
   },
   {
     name: "set_quick_replies",
@@ -469,19 +472,8 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
       const name = str(a.name);
       const phone = str(a.phone);
       if (!name && phone.replace(/\D/g, "").length < 8) return { error: "請客人提供訂購者姓名或完整電話" };
-      const found: { sys: Sys; o: OrderInfo }[] = [];
-      const errors: string[] = [];
-      await Promise.all(
-        SYSTEMS.map(async (sys) => {
-          try {
-            for (const o of await queryOrders(sys, name, phone)) found.push({ sys, o });
-          } catch (e) {
-            errors.push(`${SYS_INFO[sys].label}訂單系統暫時查不到（${e instanceof Error ? e.message : e}）`);
-          }
-        }),
-      );
+      const { found, errors } = await findOrders(isSys(a.product) ? [a.product] : SYSTEMS, name, phone);
       t.toolErrors.push(...errors);
-      found.sort((x, y) => (y.o.time ?? "").localeCompare(x.o.time ?? ""));
       if (found.length) t.out.push(orderCarousel(found));
       t.notes.push(`[查詢訂單 ${name} ${phone}：找到 ${found.length} 筆${found.length ? "，已傳送訂單卡片" : ""}]`);
       return {
@@ -543,6 +535,75 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
   };
 }
 
+/** 查 ll3 訂單（指定的系統），最新的在前；某一套連不上時另一套照樣回傳 */
+async function findOrders(systems: Sys[], name: string, phone: string) {
+  const found: { sys: Sys; o: OrderInfo }[] = [];
+  const errors: string[] = [];
+  await Promise.all(
+    systems.map(async (sys) => {
+      try {
+        for (const o of await queryOrders(sys, name, phone)) found.push({ sys, o });
+      } catch (e) {
+        errors.push(`${SYS_INFO[sys].label}訂單系統暫時查不到（${e instanceof Error ? e.message : e}）`);
+      }
+    }),
+  );
+  found.sort((x, y) => (y.o.time ?? "").localeCompare(x.o.time ?? ""));
+  return { found, errors };
+}
+
+/** 客人上次在 LINE 下單留的訂購者電話（「用 0937***993 查詢」按鈕；電話只存在主機，不放在按鈕資料裡） */
+async function lastBuyerPhone(userId: string) {
+  const d = await OrderDraft.findOne({ userId, status: "created" }).sort({ orderedAt: -1 }).select("data.buyerPhone").lean();
+  const p = d?.data?.buyerPhone?.trim() ?? "";
+  return p.replace(/\D/g, "").length >= 8 ? p : "";
+}
+
+/** 0937521993 → 0937***993 */
+export const maskPhone = (p: string) => {
+  const d = p.replace(/\D/g, "");
+  return d.length >= 8 ? `${d.slice(0, 4)}***${d.slice(-3)}` : "***";
+};
+
+/* 圖文選單「查詢訂單」：先選甜柿／水蜜桃，再用上次的電話或客人提供的姓名、電話查 */
+export const ORDER_MENU = /^(查詢?|查一下)(我的)?訂單[？?]?$/;
+export const ORDER_MENU_QUESTION = "請問要查詢甜柿還是水蜜桃的訂單？";
+const sysQuick = (sys: Sys): QuickItem => ({ label: `${SYS_INFO[sys].label}訂單`, data: `lookup:${sys}` });
+const otherSys = (sys: Sys): Sys => (sys === "kaki" ? "peach" : "kaki");
+
+async function lookupAsk(user: LineUserDoc, sys: Sys, replyToken: string) {
+  const userId = user._id;
+  await saveMsg(userId, "user", `${SYS_INFO[sys].label}訂單`);
+  const phone = await lastBuyerPhone(userId).catch(() => "");
+  const msg = `好的，請告訴我訂購者的姓名或電話（擇一），我幫您查${SYS_INFO[sys].label}的訂單。${phone ? "\n之前在 LINE 下過單的話，也可以直接按下面的按鈕。" : ""}`;
+  const quick: QuickItem[] = [
+    ...(phone ? [{ label: `用 ${maskPhone(phone)} 查詢`, data: `lookupme:${sys}` }] : []),
+    { label: `改查${SYS_INFO[otherSys(sys)].label}`, data: `lookup:${otherSys(sys)}` },
+  ];
+  await send(userId, replyToken, [withQuickReply(textMsg(msg), quick)]);
+  await saveMsg(userId, "model", msg);
+}
+
+async function lookupMine(user: LineUserDoc, sys: Sys, replyToken: string) {
+  const userId = user._id;
+  const label = SYS_INFO[sys].label;
+  const phone = await lastBuyerPhone(userId).catch(() => "");
+  if (!phone) return lookupAsk(user, sys, replyToken);
+  const masked = maskPhone(phone);
+  await saveMsg(userId, "user", `用 ${masked} 查詢${label}訂單`);
+  void showLoading(userId, 20);
+  const { found, errors } = await findOrders([sys], "", phone);
+  const again: QuickItem[] = [{ label: `改查${SYS_INFO[otherSys(sys)].label}`, data: `lookup:${otherSys(sys)}` }];
+  let msg: string;
+  if (found.length) msg = `用 ${masked} 找到 ${found.length} 筆${label}訂單：`;
+  else if (errors.length) msg = `${label}訂單系統暫時查不到，請稍後再試一次，不好意思！`;
+  else msg = `用 ${masked} 查不到${label}的訂單，可能是用其他電話或姓名下單的，請告訴我訂購者的姓名或電話，我再幫您查。`;
+  const msgs: LineMessage[] = [textMsg(msg), ...(found.length ? [orderCarousel(found)] : [])];
+  msgs[msgs.length - 1] = withQuickReply(msgs[msgs.length - 1], again);
+  await send(userId, replyToken, msgs);
+  await saveMsg(userId, "model", `${msg}${found.length ? `\n[查詢訂單 ${masked}：找到 ${found.length} 筆，已傳送訂單卡片]` : ""}`);
+}
+
 /** 這位客人最近一筆成功的訂單（給 AI 處理「跟上次一樣」；對話紀錄太舊看不到也找得到） */
 async function lastOrderText(userId: string) {
   const d = await OrderDraft.findOne({ userId, status: "created" }).sort({ orderedAt: -1 }).lean();
@@ -565,6 +626,11 @@ async function history(userId: string): Promise<Content[]> {
   return list;
 }
 
+/** 圖文選單「價格運費」（或客人只打「價格運費」）：先問哪一種水果，不用呼叫 AI */
+export const PRICE_MENU = /^(價格|價錢)[和與跟及、]?運費[？?]?$/;
+export const PRICE_MENU_QUESTION = "請問想看甜柿還是水蜜桃？";
+export const PRICE_MENU_OPTIONS = ["甜柿價格運費", "水蜜桃價格運費"];
+
 export async function handleText(user: LineUserDoc, text: string, replyToken?: string) {
   const userId = user._id;
   await LineUser.updateOne({ _id: userId }, { $set: { lastMessageAt: new Date() } });
@@ -585,6 +651,17 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
       tt.notes = [];
       await raiseAlert(tt, "human", `客人 1 分鐘內傳了超過 ${flood.limit} 則訊息，機器人先暫停回覆 1 分鐘`).catch((e) => console.error("raiseAlert", e));
     }
+    return;
+  }
+
+  if (PRICE_MENU.test(text.replace(/\s/g, ""))) {
+    await send(userId, replyToken, [withQuickReply(textMsg(PRICE_MENU_QUESTION), PRICE_MENU_OPTIONS.map((label) => ({ label })))]);
+    await saveMsg(userId, "model", PRICE_MENU_QUESTION);
+    return;
+  }
+  if (ORDER_MENU.test(text.replace(/\s/g, ""))) {
+    await send(userId, replyToken, [withQuickReply(textMsg(ORDER_MENU_QUESTION), SYSTEMS.map(sysQuick))]);
+    await saveMsg(userId, "model", ORDER_MENU_QUESTION);
     return;
   }
   void showLoading(userId, 30);
@@ -659,6 +736,9 @@ async function handlePostback(user: LineUserDoc, data: string, replyToken: strin
     await send(userId, replyToken, [img ? imageMsg(img) : textMsg("這個規格目前沒有照片，不好意思！")]);
     return;
   }
+
+  if (kind === "lookup" && isSys(a)) return lookupAsk(user, a, replyToken);
+  if (kind === "lookupme" && isSys(a)) return lookupMine(user, a, replyToken);
 
   if (kind === "nofollow") {
     await LineUser.updateOne({ _id: userId }, { $set: { followups: 2 } });
