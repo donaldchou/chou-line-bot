@@ -55,7 +55,7 @@ export async function previewAnswer(question: string, faq: string, opts: { name?
       const r = await getProducts(a.product);
       return {
         product: SYS_INFO[a.product].label,
-        open: r.open,
+        status: r.open ? "開放訂購中" : "目前沒有開放訂購",
         closedMessage: r.open ? undefined : r.closedMsg,
         products: r.products.map((p) => ({ id: p.id, name: p.name, price: p.price })),
       };

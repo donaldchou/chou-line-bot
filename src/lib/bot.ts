@@ -167,6 +167,10 @@ export const addMissingLinks = (text: string, links: string[]) => {
 export const stripNotes = (text: string) =>
   text
     .replace(/^[ \t]*\[(已|訂單|寄出|系統)[^\]\n]*\][ \t]*$/gm, "")
+    // 程式用語（open=false、orderStatus: 額滿…）不給客人看，連同前面的「系統顯示」一起拿掉
+    .replace(/(系統(資料)?(顯示|回傳|上)?[ \t]*)?[`「（(]?(?<![?&/#=.\w-])(open|status|orderStatus|product|id|leftThisWeek)[ \t]*[=:：][ \t]*[`「]?[\w.\-]+[`」）)]?[ \t]*[，,、]?/gi, "")
+    // 值是中文（orderStatus：額滿）→ 只拿掉程式用語，留下「額滿」
+    .replace(/(系統(資料)?(顯示|回傳|上)?[ \t]*)?(?<![?&/#=.\w-])(open|status|orderStatus|product|leftThisWeek)[ \t]*[=:：][ \t]*/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
@@ -339,7 +343,8 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
       const capOf = new Map(caps.map((c) => [c.id, c]));
       return {
         product: SYS_INFO[sys].label,
-        open: r.open,
+        // 用中文狀態，AI 才不會把 open=false 這種程式用語念給客人
+        status: r.open ? "開放訂購中" : "目前沒有開放訂購",
         closedMessage: r.open ? undefined : r.closedMsg,
         products: r.products.map((p) => {
           const c = capOf.get(p.id);
@@ -365,7 +370,7 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
       t.out.push(productCarousel(sys, list.map((p) => ({ p, img: productImg(sys, p.picture) }))));
       t.notes.push(`[已傳送${SYS_INFO[sys].label}產品卡片：${list.map((p) => `${p.name}（貨號 ${p.id}）${p.price}元`).join("、")}]`);
       await markInterest(t.user, sys);
-      return { sent: list.length, open: r.open, closedMessage: r.open ? undefined : r.closedMsg };
+      return { sent: list.length, status: r.open ? "開放訂購中" : "目前沒有開放訂購", closedMessage: r.open ? undefined : r.closedMsg };
     },
 
     async prepare_order(a) {
@@ -604,6 +609,17 @@ async function lookupMine(user: LineUserDoc, sys: Sys, replyToken: string) {
   await saveMsg(userId, "model", `${msg}${found.length ? `\n[查詢訂單 ${masked}：找到 ${found.length} 筆，已傳送訂單卡片]` : ""}`);
 }
 
+/** 比對題目用：去掉空白和標點 */
+const qaKey = (s: string) => s.replace(/[\s?？!！。，,.、~～]/g, "");
+
+/** 客人的訊息跟某題問答的題目一字不差（例如圖文選單按鈕「我要訂甜柿」）→ 那一題 */
+async function exactQa(text: string) {
+  const k = qaKey(text);
+  if (!k) return null;
+  const items = await QaItem.find({ active: true }, { q: 1 }).lean<{ _id: string; q: string }[]>();
+  return items.find((i) => qaKey(i.q) === k) ?? null;
+}
+
 /** 這位客人最近一筆成功的訂單（給 AI 處理「跟上次一樣」；對話紀錄太舊看不到也找得到） */
 async function lastOrderText(userId: string) {
   const d = await OrderDraft.findOne({ userId, status: "created" }).sort({ orderedAt: -1 }).lean();
@@ -670,6 +686,10 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   let answer = "";
   let failed = "";
   const sentSomething = () => t.out.length > 0 || !!t.qaPhotos;
+  // 題目一字不差（選單按鈕）：照片由程式直接附上，不靠 AI 記得呼叫 get_qa_answer（AI 再呼叫也不會重複傳）
+  await exactQa(text)
+    .then((q) => (q ? rawHandlers(t).get_qa_answer({ qa_id: String(q._id) }) : null))
+    .catch((e) => console.error("exactQa", e));
   try {
     const faq = await qaPromptText().catch((e) => (console.error("qaPromptText", e), ""));
     const [hist, last] = await Promise.all([history(userId), lastOrderText(userId).catch(() => "")]);
