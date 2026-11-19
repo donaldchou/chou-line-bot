@@ -155,6 +155,8 @@ interface Turn {
   qaPhotos: { mode: QaSendMode; msgs: LineMessage[]; ids: string[] } | null;
   /** 這一輪用到的問答裡的網址：AI 的回覆漏掉就補在最後 */
   links: string[];
+  /** 客人按的選單按鈕剛好是這題的題目：照片每次都傳（不管剛剛傳過沒） */
+  forcePhotosFor?: string;
 }
 
 /** 回覆漏掉的網址補在最後（例如問答裡的 Google 導航連結） */
@@ -506,7 +508,7 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
       // 最近幾則已經傳過這題的照片就不再傳（AI 有時會把前面的問題再處理一次）；客人明說要再看一次才重傳
       const recent = await ChatMessage.find({ userId: t.user._id, role: "model" }, { text: 1 }).sort({ at: -1 }).limit(3).lean();
       const again = /再(傳|給|看|發)|重(新)?傳|沒(收到|看到)/.test(t.text);
-      if (!again && recent.some((m) => m.text.includes(`（問答：${i.q}）]`))) return skip("這題的照片剛剛已經傳過，這次不再傳，也不要說又傳了一次");
+      if (!again && t.forcePhotosFor !== String(i._id) && recent.some((m) => m.text.includes(`（問答：${i.q}）]`))) return skip("這題的照片剛剛已經傳過，這次不再傳，也不要說又傳了一次");
       if ((t.qaPhotos?.ids.length ?? 0) >= 2) return skip("這一輪已經傳了兩題的照片，這題的照片請客人再問");
       t.qaPhotos = {
         mode: t.qaPhotos?.mode ?? i.sendMode,
@@ -686,9 +688,13 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   let answer = "";
   let failed = "";
   const sentSomething = () => t.out.length > 0 || !!t.qaPhotos;
-  // 題目一字不差（選單按鈕）：照片由程式直接附上，不靠 AI 記得呼叫 get_qa_answer（AI 再呼叫也不會重複傳）
+  // 題目一字不差（選單按鈕）：照片由程式直接附上，每次都傳，不靠 AI 記得呼叫 get_qa_answer（同一輪 AI 再呼叫也不會重複傳）
   await exactQa(text)
-    .then((q) => (q ? rawHandlers(t).get_qa_answer({ qa_id: String(q._id) }) : null))
+    .then((q) => {
+      if (!q) return null;
+      t.forcePhotosFor = String(q._id);
+      return rawHandlers(t).get_qa_answer({ qa_id: String(q._id) });
+    })
     .catch((e) => console.error("exactQa", e));
   try {
     const faq = await qaPromptText().catch((e) => (console.error("qaPromptText", e), ""));
