@@ -30,7 +30,7 @@ import {
   type OrderInfo,
   type Sys,
 } from "./ll3";
-import { confirmCard, deliveryText, orderCarousel, payText, photoAlbum, productCarousel, successCard } from "./flex";
+import { confirmCard, deliveryText, orderCarousel, payText, photoAlbum, successCard } from "./flex";
 import { imgSig } from "./sign";
 import { CAP_LABEL, capReplies, checkCapacity, productCaps } from "./capacity";
 import { linksIn, photoSummary, qaPromptText, sendsPhotos } from "./qa";
@@ -227,18 +227,7 @@ export const TOOLS: FunctionDecl[] = [
     description: "查詢甜柿或水蜜桃目前的規格、價格與是否開放訂購。報價或回答能不能訂之前一定要先呼叫。",
     parameters: { type: "object", properties: { product: { type: "string", enum: ["kaki", "peach"], description: "kaki=甜柿, peach=水蜜桃" } }, required: ["product"] },
   },
-  {
-    name: "send_product_photos",
-    description: "傳產品照片卡片給客人（可左右滑動，有「訂這個」按鈕）。",
-    parameters: {
-      type: "object",
-      properties: {
-        product: { type: "string", enum: ["kaki", "peach"] },
-        product_ids: { type: "array", items: { type: "string" }, description: "只傳這些貨品編號；省略＝全部規格" },
-      },
-      required: ["product"],
-    },
-  },
+  // 農場主人不要「產品卡片」（一排有「訂這個」的卡片）：AI 不能傳，照片一律用問答管理裡的（get_qa_answer）
   {
     name: "get_qa_answer",
     description: "取得常見問題的回答，並把那題附的照片傳給客人。常見問題裡註明要呼叫的題目一定要用，qa_id 照抄。",
@@ -362,20 +351,6 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
         }),
         note: "orderStatus 不是「接單中」的規格不能下單，照 reply 的意思回覆客人，並推薦其他接單中的規格",
       };
-    },
-
-    async send_product_photos(a) {
-      // 客人按的是選單按鈕（問答照片已經由程式附上）：不要再傳一排商品卡片
-      if (t.forcePhotosFor) return { sent: 0, note: "問答的產品照片和價格照片已經傳給客人了，不要再傳商品卡片，也不要說有傳卡片" };
-      const sys = asSys(a.product);
-      const ids = Array.isArray(a.product_ids) ? (a.product_ids as unknown[]).map(String) : [];
-      const r = await getProducts(sys);
-      const list = r.products.filter((p) => !ids.length || ids.includes(p.id));
-      if (!list.length) return { error: "沒有這些商品" };
-      t.out.push(productCarousel(sys, list.map((p) => ({ p, img: productImg(sys, p.picture) }))));
-      t.notes.push(`[已傳送${SYS_INFO[sys].label}產品卡片：${list.map((p) => `${p.name}（貨號 ${p.id}）${p.price}元`).join("、")}]`);
-      await markInterest(t.user, sys);
-      return { sent: list.length, status: r.open ? "開放訂購中" : "目前沒有開放訂購", closedMessage: r.open ? undefined : r.closedMsg };
     },
 
     async prepare_order(a) {
