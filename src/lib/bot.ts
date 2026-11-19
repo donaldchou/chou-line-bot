@@ -459,7 +459,7 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
       if (!name && phone.replace(/\D/g, "").length < 8) return { error: "請客人提供訂購者姓名或完整電話" };
       const { found, errors } = await findOrders(isSys(a.product) ? [a.product] : SYSTEMS, name, phone);
       t.toolErrors.push(...errors);
-      if (found.length) t.out.push(orderCarousel(found));
+      if (found.length) t.out.push(orderCarousel(found, phone));
       t.notes.push(`[查詢訂單 ${name} ${phone}：找到 ${found.length} 筆${found.length ? "，已傳送訂單卡片" : ""}]`);
       return {
         count: found.length,
@@ -585,7 +585,7 @@ async function lookupMine(user: LineUserDoc, sys: Sys, replyToken: string) {
   if (found.length) msg = `用 ${masked} 找到 ${found.length} 筆${label}訂單：`;
   else if (errors.length) msg = `${label}訂單系統暫時查不到，請稍後再試一次，不好意思！`;
   else msg = `用 ${masked} 查不到${label}的訂單，可能是用其他電話或姓名下單的，請告訴我訂購者的姓名或電話，我再幫您查。`;
-  const msgs: LineMessage[] = [textMsg(msg), ...(found.length ? [orderCarousel(found)] : [])];
+  const msgs: LineMessage[] = [textMsg(msg), ...(found.length ? [orderCarousel(found, phone)] : [])];
   msgs[msgs.length - 1] = withQuickReply(msgs[msgs.length - 1], again);
   await send(userId, replyToken, msgs);
   await saveMsg(userId, "model", `${msg}${found.length ? `\n[查詢訂單 ${masked}：找到 ${found.length} 筆，已傳送訂單卡片]` : ""}`);

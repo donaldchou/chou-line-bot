@@ -162,41 +162,56 @@ export function successCard(d: OrderDraftDoc, orderId: number) {
 const shipped = (o: OrderInfo) => o.schedule.includes("已送出") || o.waybills.length > 0;
 const cancelled = (o: OrderInfo) => o.schedule.includes("取消");
 
-/** 7. 查詢訂單：每筆一張卡 */
-export function orderCarousel(list: { sys: Sys; o: OrderInfo }[]) {
+/** 7. 查詢訂單：每筆一張卡（樣式同「訂購成功」卡：彩色標題列、左標籤右內容、下面一個按鈕）
+ *  phone：客人查詢用的電話，「查看訂單進度」直接開這支電話的訂單頁（沒有就開查詢頁） */
+export function orderCarousel(list: { sys: Sys; o: OrderInfo }[], phone?: string) {
   const bubbles = list.slice(0, 10).map(({ sys, o }) => {
-    const badge = cancelled(o) ? ["已取消", "#B3261E"] : shipped(o) ? ["已寄出", GREEN] : ["處理中", ORANGE];
+    const [title, color] = cancelled(o)
+      ? ["這筆訂單已取消", "#B3261E"]
+      : shipped(o)
+        ? ["已經寄出囉！", GREEN]
+        : ["訂單處理中，尚未寄出", ORANGE];
     const w = o.waybills;
     return {
       type: "bubble",
-      size: "kilo",
+      header: header(title, color),
       body: {
         type: "box",
         layout: "vertical",
         spacing: "sm",
         contents: [
-          {
-            type: "box",
-            layout: "horizontal",
-            contents: [
-              { type: "text", text: `${SYS_INFO[sys].label} 訂單流水號 ${o.id}`, weight: "bold", size: "md", flex: 1 },
-              { type: "text", text: badge[0], color: badge[1], weight: "bold", size: "sm", align: "end", flex: 0 },
-            ],
-          },
+          row("訂單流水號", `${SYS_INFO[sys].label} ${o.id}`, { bold: true, size: "md" }),
           row("下單日期", (o.time ?? "").slice(0, 10)),
           row("商品", o.items.map((i) => `${i.name} × ${i.qty}`).join("、") + (o.extras ? `、${o.extras}` : "")),
           row("收件者", o.recipient),
-          row("總金額", money(o.total)),
+          row("總金額", `${money(o.total)}${o.pay ? `（${o.pay}）` : ""}`),
           sep,
           ...(w.length
             ? w.flatMap((x) => [
                 row(w.length > 1 ? `託運單 ${x.pkg}/${x.pkgTotal}` : "託運單號", x.obt, { bold: true }),
                 row("寄送進度", x.status ? `${x.status}${x.statusTime ? `（${x.statusTime.slice(5)}）` : ""}` : "尚未更新"),
               ])
-            : [{ type: "text", text: cancelled(o) ? "此訂單已取消" : "尚未寄出，寄出時會用 LINE 通知您。", size: "sm", color: GREY, wrap: true, margin: "md" }]),
+            : [
+                {
+                  type: "text",
+                  wrap: true,
+                  size: "sm",
+                  color: GREY,
+                  margin: "md",
+                  text: cancelled(o) ? "這筆訂單已取消，有問題請直接留言給我們。" : "還沒寄出，寄出時我們會用 LINE 通知您。按下面的按鈕可以看訂單進度、回報繳費。",
+                },
+              ]),
         ],
       },
-      ...(w.length ? { footer: { type: "box", layout: "vertical", contents: [btn("到黑貓查詢包裹", { type: "uri", uri: TRACK_URL })] } } : {}),
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          ...(w.length ? [btn("到黑貓查詢包裹", { type: "uri", uri: TRACK_URL })] : []),
+          btn("查看訂單進度", { type: "uri", uri: queryPage(sys, phone) }, "secondary"),
+        ],
+      },
     };
   });
   return flex(`找到 ${list.length} 筆訂單`, { type: "carousel", contents: bubbles });
