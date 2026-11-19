@@ -626,7 +626,17 @@ async function history(userId: string): Promise<Content[]> {
 
 /** 圖文選單「價格運費」（或客人只打「價格運費」）：先問哪一種水果，不用呼叫 AI */
 export const PRICE_MENU = /^(價格|價錢)[和與跟及、]?運費[？?]?$/;
-export const PRICE_MENU_QUESTION = "請問想看水蜜桃還是甜柿？";
+/** 圖文選單「現場採果」（舊名「來農場玩」）：先給「現場採果」「導航到農場」兩個按鈕，不用呼叫 AI */
+export const FARM_MENU = /^(來農場玩|現場採果)[！!？?]?$/;
+export const FARM_MENU_QUESTION = "歡迎來拉拉山周家農場玩！請問想了解哪一個？";
+const FARM_QUICK: QuickItem[] = [
+  { label: "現場採果價格與介紹", data: "farm:pick" },
+  { label: "導航到農場", data: "farm:nav" },
+];
+/** 按了之後當成客人問這句（對得上問答題目：照片、導航連結會跟著傳） */
+const FARM_ASK = { pick: "可以去現場採果嗎？", nav: "農場在哪裡？" } as const;
+
+export const PRICE_MENU_QUESTION ="請問想看水蜜桃還是甜柿？";
 export const PRICE_MENU_OPTIONS = ["水蜜桃價格運費", "甜柿價格運費"];
 
 export async function handleText(user: LineUserDoc, text: string, replyToken?: string) {
@@ -655,6 +665,11 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   if (PRICE_MENU.test(text.replace(/\s/g, ""))) {
     await send(userId, replyToken, [withQuickReply(textMsg(PRICE_MENU_QUESTION), PRICE_MENU_OPTIONS.map((label) => ({ label })))]);
     await saveMsg(userId, "model", PRICE_MENU_QUESTION);
+    return;
+  }
+  if (FARM_MENU.test(text.replace(/\s/g, ""))) {
+    await send(userId, replyToken, [withQuickReply(textMsg(FARM_MENU_QUESTION), FARM_QUICK)]);
+    await saveMsg(userId, "model", FARM_MENU_QUESTION);
     return;
   }
   if (ORDER_MENU.test(text.replace(/\s/g, ""))) {
@@ -743,6 +758,7 @@ async function handlePostback(user: LineUserDoc, data: string, replyToken: strin
     return;
   }
 
+  if (kind === "farm" && (a === "pick" || a === "nav")) return handleText(user, FARM_ASK[a], replyToken);
   if (kind === "lookup" && isSys(a)) return lookupAsk(user, a, replyToken);
   if (kind === "lookupme" && isSys(a)) return lookupMine(user, a, replyToken);
 
