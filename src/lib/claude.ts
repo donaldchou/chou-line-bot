@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Content, FunctionDecl, ToolHandler } from "./gemini";
+import type { ClaudeUsage } from "./ai-models";
 
 /* Claude 對話＋函式呼叫（用哪個模型由 ai.ts 決定） */
 
@@ -40,8 +41,9 @@ export async function claudeChat(
   contents: Content[],
   tools: FunctionDecl[],
   handlers: Record<string, ToolHandler>,
-  opts: { model: string; budget?: number; firstTimeout?: number },
+  opts: { model: string; budget?: number; firstTimeout?: number; usage?: ClaudeUsage },
 ) {
+  const usage = opts.usage ?? { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, requests: 0 };
   const messages = toMessages(contents);
   if (!messages.length) return "";
   const deadline = Date.now() + Math.min(opts.budget ?? CHAT_BUDGET, CHAT_BUDGET);
@@ -66,6 +68,12 @@ export async function claudeChat(
       },
       { timeout: Math.min(left, ranTools ? 30_000 : (opts.firstTimeout ?? 30_000)) },
     );
+    // 記下用量（後台估算花費）
+    usage.requests++;
+    usage.input += res.usage.input_tokens ?? 0;
+    usage.output += res.usage.output_tokens ?? 0;
+    usage.cacheWrite += res.usage.cache_creation_input_tokens ?? 0;
+    usage.cacheRead += res.usage.cache_read_input_tokens ?? 0;
     const text = res.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
       .map((b) => b.text)

@@ -11,6 +11,25 @@ export const AI_MODELS = [
 ] as const satisfies readonly { id: string; label: string; provider: Provider; note: string }[];
 
 export type AiModelId = (typeof AI_MODELS)[number]["id"];
+
+/**
+ * Claude 價錢（美元／每 100 萬 token，2026-11 官方價目）。
+ * 寫入快取＝輸入價 1.25 倍、讀取快取＝輸入價 0.1 倍。Gemini 用免費方案，不算錢。
+ */
+export const CLAUDE_PRICE: Record<string, { input: number; output: number }> = {
+  "claude-haiku-5-5": { input: 0.1, output: 0.5 },
+  "claude-sonnet-5-5": { input: 2, output: 10 },
+  "claude-opus-5-5": { input: 4, output: 20 },
+};
+/** Gemini 免費方案每天的次數上限（目前只確定 3.6 Flash；其他的不顯示上限） */
+export const GEMINI_DAILY_LIMIT: Record<string, number> = { "gemini-3.6-flash": 20 };
+
+export type ClaudeUsage = { input: number; output: number; cacheWrite: number; cacheRead: number; requests: number };
+/** 這些 token 大約花多少美元（不在價目表的模型用 Sonnet 的價錢估，寧可高估） */
+export function claudeCost(model: string, u: ClaudeUsage) {
+  const p = CLAUDE_PRICE[model] ?? CLAUDE_PRICE["claude-sonnet-5-5"];
+  return (u.input * p.input + u.cacheWrite * p.input * 1.25 + u.cacheRead * p.input * 0.1 + u.output * p.output) / 1_000_000;
+}
 /** 主版本、備援都失敗時最後再試的模型 */
 export const LAST_RESORT: AiModelId = "gemini-3.5-flash-lite";
 
@@ -65,5 +84,22 @@ export type AiStatus = {
   keys: Record<Provider, boolean>;
   updated: { at: string; by: string } | null;
   last: { model: string; label: string; at: string; fellBack: boolean } | null;
-  days: { date: string; counts: { model: string; label: string; n: number }[]; fallback: number }[];
+  days: { date: string; counts: { model: string; label: string; n: number }[]; fallback: number; cost: number }[];
+  /** Claude 費用估算（美元） */
+  cost: {
+    /** 你輸入的儲值餘額與輸入時間；沒輸入過是 null */
+    balance: number | null;
+    balanceAt: string | null;
+    /** 輸入餘額之後花掉的 */
+    spent: number;
+    remaining: number | null;
+    today: number;
+    week: number;
+    /** 最近 7 天每次 Claude 回答平均花費 */
+    perAnswer: number | null;
+    /** 剩下的錢大約還能回答幾則 */
+    answersLeft: number | null;
+  };
+  /** Gemini 今天打了幾次 API（免費方案有每天上限） */
+  gemini: { model: string; label: string; today: number; limit: number | null }[];
 };

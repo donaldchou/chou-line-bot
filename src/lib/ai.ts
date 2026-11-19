@@ -1,7 +1,22 @@
-import { chat as geminiChat, geminiEnabled, geminiPing, type Content, type FunctionDecl, type ToolHandler } from "./gemini";
+import { chat as geminiChat, geminiEnabled, geminiPing, type Content, type FunctionDecl, type GeminiUsed, type ToolHandler } from "./gemini";
 import { claudeChat, claudeEnabled, claudePing } from "./claude";
 import { AdminSetting } from "./models";
-import { AI_MODELS, aiErrorText, isAiModel, KEY_LABEL, LAST_RESORT, modelLabel, PROVIDER_LABEL, providerOf, type AiChoice, type AiStatus, type Provider } from "./ai-models";
+import {
+  AI_MODELS,
+  aiErrorText,
+  claudeCost,
+  GEMINI_DAILY_LIMIT,
+  isAiModel,
+  KEY_LABEL,
+  LAST_RESORT,
+  modelLabel,
+  PROVIDER_LABEL,
+  providerOf,
+  type AiChoice,
+  type AiStatus,
+  type ClaudeUsage,
+  type Provider,
+} from "./ai-models";
 
 /*
  * AI 對話入口：依後台「AI版本」設定的主版本 → 備援 → 最後再試 Gemini Flash Lite。
@@ -42,16 +57,33 @@ const today = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Tai
 /** Mongo 欄位名稱不能有「.」 */
 const field = (model: string) => model.replace(/\./g, "_");
 
-/** 記下這次是哪個模型回答的（後台「AI版本」顯示）；記錄失敗不影響回覆客人 */
-async function recordUse(model: string, fellBack: boolean) {
+/** 金額存成「百萬分之一美元」的整數，累加不會有小數誤差 */
+const MICRO = 1_000_000;
+
+/**
+ * 記下用量（後台「AI版本」顯示）；記錄失敗不影響回覆客人。
+ * answered：這次是哪個模型回答的（失敗時不傳，只記花費）
+ * claude：這一輪 Claude 用掉的 token；gemini：各 Gemini 模型成功打了幾次 API
+ */
+async function recordUse(o: { answered?: string; fellBack?: boolean; claude?: { model: string; usage: ClaudeUsage }; gemini?: Record<string, number> }) {
   try {
     const d = today();
+    const inc: Record<string, number> = {};
+    if (o.answered) {
+      inc[`days.${d}.${field(o.answered)}`] = 1;
+      if (o.fellBack) inc[`days.${d}.__fallback`] = 1;
+    }
+    if (o.claude?.usage.requests) {
+      const micros = Math.round(claudeCost(o.claude.model, o.claude.usage) * MICRO);
+      inc[`days.${d}.__costMicros`] = micros;
+      inc.spentMicros = micros;
+      if (o.answered === o.claude.model) inc[`days.${d}.__claudeAnswers`] = 1;
+    }
+    for (const [m, n] of Object.entries(o.gemini ?? {})) inc[`days.${d}.__req_${field(m)}`] = n;
+    if (!Object.keys(inc).length) return;
     await AdminSetting.collection.updateOne(
       { _id: USAGE_ID as never },
-      {
-        $inc: { [`days.${d}.${field(model)}`]: 1, ...(fellBack ? { [`days.${d}.__fallback`]: 1 } : {}) },
-        $set: { last: { model, at: new Date(), fellBack } },
-      },
+      { $inc: inc, ...(o.answered ? { $set: { last: { model: o.answered, at: new Date(), fellBack: !!o.fellBack } } } : {}) },
       { upsert: true },
     );
   } catch (e) {
@@ -87,18 +119,21 @@ export async function chat(system: string, contents: Content[], tools: FunctionD
     const budget = TOTAL_BUDGET - (Date.now() - start);
     if (budget < 8_000) break;
     const more = i < steps.length - 1;
+    const usage: ClaudeUsage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, requests: 0 };
+    const used: GeminiUsed = {};
     try {
       if (s.provider === "anthropic") {
-        const text = await claudeChat(system, contents, tools, wrapped, { model: s.models[0], budget, firstTimeout: more ? 20_000 : undefined });
-        await recordUse(s.models[0], s.models[0] !== chain[0]);
+        const text = await claudeChat(system, contents, tools, wrapped, { model: s.models[0], budget, firstTimeout: more ? 20_000 : undefined, usage });
+        await recordUse({ answered: s.models[0], fellBack: s.models[0] !== chain[0], claude: { model: s.models[0], usage } });
         return text;
       }
-      const used: { model?: string } = {};
       const text = await geminiChat(system, contents, tools, wrapped, { models: s.models, budget, used });
       const m = used.model ?? s.models[0];
-      await recordUse(m, m !== chain[0]);
+      await recordUse({ answered: m, fellBack: m !== chain[0], gemini: used.requests });
       return text;
     } catch (e) {
+      // 失敗也可能已經花了錢（例如函式呼叫到一半逾時）
+      await recordUse(s.provider === "anthropic" ? { claude: { model: s.models[0], usage } } : { gemini: used.requests });
       console.error(`AI 失敗（${s.models.join("、")}）`, e);
       errs.push(aiErrorText(e, s.models.length === 1 ? s.models[0] : undefined));
       if (ranTools) break;
@@ -113,7 +148,13 @@ export async function chat(system: string, contents: Content[], tools: FunctionD
 export async function aiStatus(): Promise<AiStatus> {
   const [d, usage] = await Promise.all([
     choiceDoc(),
-    AdminSetting.findById(USAGE_ID).lean() as Promise<{ last?: { model: string; at: Date; fellBack: boolean }; days?: Record<string, Record<string, number>> } | null>,
+    AdminSetting.findById(USAGE_ID).lean() as Promise<{
+      last?: { model: string; at: Date; fellBack: boolean };
+      days?: Record<string, Record<string, number>>;
+      balanceMicros?: number;
+      balanceAt?: Date;
+      spentMicros?: number;
+    } | null>,
   ]);
   const choice = await getChoice();
   const chain = [...new Set([choice.primary, choice.fallback, LAST_RESORT])].map((id, i) => {
@@ -127,22 +168,65 @@ export async function aiStatus(): Promise<AiStatus> {
     .map(([date, c]) => ({
       date,
       fallback: c.__fallback ?? 0,
+      cost: (c.__costMicros ?? 0) / MICRO,
+      claudeAnswers: c.__claudeAnswers ?? 0,
+      // 「__」開頭的是統計欄位，其他是各模型回答次數
       counts: Object.entries(c)
-        .filter(([k]) => k !== "__fallback")
+        .filter(([k]) => !k.startsWith("__"))
         .map(([k, n]) => {
           const id = known.get(k) ?? k.replace(/_/g, ".");
           return { model: id, label: modelLabel(id), n };
         })
         .sort((a, b) => b.n - a.n),
     }));
+
+  // Claude 費用估算
+  const todayKey = today();
+  const week = days.slice(0, 7);
+  const weekCost = week.reduce((s, x) => s + x.cost, 0);
+  const weekAnswers = week.reduce((s, x) => s + x.claudeAnswers, 0);
+  const perAnswer = weekAnswers ? weekCost / weekAnswers : null;
+  const balance = usage?.balanceMicros != null ? usage.balanceMicros / MICRO : null;
+  const spent = (usage?.spentMicros ?? 0) / MICRO;
+  const remaining = balance === null ? null : Math.max(0, balance - spent);
+  const todayRow = usage?.days?.[todayKey] ?? {};
+
   return {
     choice,
     chain,
     keys: { anthropic: claudeEnabled(), google: geminiEnabled() },
     updated: d?.at ? { at: new Date(d.at).toISOString(), by: d.by ?? "" } : null,
     last: usage?.last ? { model: usage.last.model, label: modelLabel(usage.last.model), at: new Date(usage.last.at).toISOString(), fellBack: usage.last.fellBack } : null,
-    days,
+    days: days.map((x) => ({ date: x.date, fallback: x.fallback, cost: x.cost, counts: x.counts })),
+    cost: {
+      balance,
+      balanceAt: usage?.balanceAt ? new Date(usage.balanceAt).toISOString() : null,
+      spent,
+      remaining,
+      today: (todayRow.__costMicros ?? 0) / MICRO,
+      week: weekCost,
+      perAnswer,
+      answersLeft: remaining !== null && perAnswer ? Math.floor(remaining / perAnswer) : null,
+    },
+    gemini: AI_MODELS.filter((m) => m.provider === "google").map((m) => ({
+      model: m.id,
+      label: m.label,
+      today: todayRow[`__req_${field(m.id)}`] ?? 0,
+      limit: GEMINI_DAILY_LIMIT[m.id] ?? null,
+    })),
   };
+}
+
+/** 輸入目前的儲值餘額（美元）：從這時候開始重新算花費 */
+export async function saveBalance(v: unknown) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 100_000) throw new AiChoiceError("餘額要是 0～100,000 的數字（美元）");
+  await AdminSetting.collection.updateOne(
+    { _id: USAGE_ID as never },
+    { $set: { balanceMicros: Math.round(n * MICRO), balanceAt: new Date(), spentMicros: 0 } },
+    { upsert: true },
+  );
+  return aiStatus();
 }
 
 export class AiChoiceError extends Error {}

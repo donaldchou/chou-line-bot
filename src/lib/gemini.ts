@@ -21,7 +21,10 @@ export type ToolHandler = (args: Record<string, unknown>) => Promise<object>;
 
 export const geminiEnabled = () => !!process.env.GEMINI_API_KEY;
 
-async function generate(system: string, contents: Content[], tools: FunctionDecl[], deadline: number, afterTools: boolean, all: string[], used: { model?: string }) {
+/** model：實際回答的模型；requests：每個模型成功打了幾次 API */
+export type GeminiUsed = { model?: string; requests?: Record<string, number> };
+
+async function generate(system: string, contents: Content[], tools: FunctionDecl[], deadline: number, afterTools: boolean, all: string[], used: GeminiUsed) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("請設定 GEMINI_API_KEY");
   let lastError = "";
@@ -57,6 +60,8 @@ async function generate(system: string, contents: Content[], tools: FunctionDecl
         continue;
       }
       used.model = model;
+      // 免費方案的每日上限算的是成功的請求次數
+      used.requests = { ...used.requests, [model]: (used.requests?.[model] ?? 0) + 1 };
       const content = data?.candidates?.[0]?.content as Content | undefined;
       if (!content?.parts?.length) {
         // 已經呼叫過函式（例如只傳照片），模型正常結束、不再打字 → 沒有文字也算完成
@@ -83,7 +88,7 @@ export async function chat(
   contents: Content[],
   tools: FunctionDecl[],
   handlers: Record<string, ToolHandler>,
-  opts: { models: string[]; budget?: number; used?: { model?: string } },
+  opts: { models: string[]; budget?: number; used?: GeminiUsed },
 ) {
   const used = opts.used ?? {};
   const convo = [...contents];

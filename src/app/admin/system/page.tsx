@@ -203,6 +203,108 @@ function TrashTab() {
   );
 }
 
+/* ---------------- AI 費用估算 ---------------- */
+
+/** 美元：小金額多顯示幾位小數 */
+const usd = (n: number) => (n === 0 ? "$0" : n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
+/** 換算台幣（約 1 美元 ≈ 32 台幣，只是方便看） */
+const twd = (n: number) => `約台幣 ${Math.round(n * 32).toLocaleString("zh-TW")} 元`;
+
+function Stat({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) {
+  return (
+    <div className={`rounded-xl border p-3.5 ${warn ? "border-[#E8A54B] bg-[#FFF6E8]" : "border-line bg-white"}`}>
+      <div className="text-xs text-mute">{label}</div>
+      <div className={`text-xl font-bold tabular-nums ${warn ? "text-[#8A4B00]" : ""}`}>{value}</div>
+      {sub && <div className="text-xs text-mute">{sub}</div>}
+    </div>
+  );
+}
+
+function CostCard({ data, onSaved }: { data: AiStatus; onSaved: (d: AiStatus) => void }) {
+  const c = data.cost;
+  const [v, setV] = useState("");
+  const gate = useCodeGate();
+  const low = c.remaining !== null && c.remaining < 1;
+  const valid = /^\d+(\.\d{1,2})?$/.test(v.trim());
+
+  const save = () =>
+    gate.ask({
+      title: "輸入儲值餘額",
+      confirmLabel: "儲存",
+      message: (
+        <>
+          目前 Claude 帳戶餘額設為 <b>${Number(v)}</b> 美元，從現在開始重新計算花費。
+        </>
+      ),
+      submit: async (code) => {
+        try {
+          onSaved(await call<AiStatus>("/api/admin/system/ai", { method: "PUT", json: { balance: Number(v) }, code }));
+          setV("");
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: errMsg(e) };
+        }
+      },
+    });
+
+  return (
+    <Card title="Claude 費用估算">
+      <p className="mb-4 text-sm text-mute">
+        每次 Claude 回答都會記下實際用掉的字數，照官方價目換算成美元。這是估算值，真正的餘額以 platform.claude.com 的 Billing 為準；儲值後請在下面重新輸入一次餘額。
+      </p>
+      {c.balance === null ? (
+        <p className="mb-4 rounded-lg bg-[#FFF4E0] px-3 py-2.5 text-sm text-[#6B3E00]">還沒輸入儲值餘額。輸入目前的餘額（例如 5），就會開始顯示預估剩餘金額。</p>
+      ) : (
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Stat label="預估剩餘" value={usd(c.remaining ?? 0)} sub={low ? "快用完了，記得儲值" : twd(c.remaining ?? 0)} warn={low} />
+          <Stat label="已花費" value={usd(c.spent)} sub={c.balanceAt ? `${fmtTime(c.balanceAt)} 輸入 $${c.balance} 之後` : undefined} />
+          <Stat label="今天／最近 7 天" value={`${usd(c.today)}／${usd(c.week)}`} />
+          <Stat
+            label="平均每則回答"
+            value={c.perAnswer !== null ? usd(c.perAnswer) : "—"}
+            sub={c.answersLeft !== null ? `剩下的錢約還能回答 ${c.answersLeft.toLocaleString("zh-TW")} 則` : "有回答紀錄後才算得出來"}
+          />
+        </div>
+      )}
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid) save();
+        }}
+      >
+        <Field label={c.balance === null ? "目前的儲值餘額（美元）" : "重新輸入餘額（美元，儲值後用）"}>
+          <input inputMode="decimal" value={v} onChange={(e) => setV(e.target.value)} placeholder="例如 5" className={`${inputCls} w-32!`} />
+        </Field>
+        <button type="submit" className={btn("pri")} disabled={!valid}>
+          儲存餘額
+        </button>
+      </form>
+
+      <div className="mt-5 border-t border-line pt-4">
+        <div className="mb-2 text-sm font-bold">Gemini 今天的使用次數（免費方案）</div>
+        <div className="flex flex-wrap gap-2">
+          {data.gemini.map((g) => {
+            const full = g.limit !== null && g.today >= g.limit;
+            const near = g.limit !== null && !full && g.today >= g.limit * 0.8;
+            return (
+              <span
+                key={g.model}
+                className={`rounded-full px-3 py-1 text-sm ${full ? "bg-[#FDECEA] font-bold text-[#9E2A1C]" : near ? "bg-[#FFF1DC] font-bold text-[#8A4B00]" : "bg-[#ECEEE8] text-ink2"}`}
+              >
+                {g.label}：{g.today}
+                {g.limit !== null ? ` / ${g.limit} 次${full ? "（今天用完了）" : ""}` : " 次"}
+              </span>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-xs text-mute">Gemini 免費方案不用錢，但每天有次數限制，用完要等明天（台灣時間下午 3～4 點左右重置）。</p>
+      </div>
+      {gate.dialog}
+    </Card>
+  );
+}
+
 /* ---------------- AI 版本 ---------------- */
 function AiTab() {
   const [data, setData] = useState<AiStatus | null>(null);
@@ -283,6 +385,8 @@ function AiTab() {
         {saved && <p className="mt-3 rounded-lg bg-[#DFF2E7] px-3 py-2 text-sm font-bold text-[#17613E]">{saved}</p>}
       </Card>
 
+      <CostCard data={data} onSaved={setData} />
+
       <Card title="目前使用的 AI 版本">
         <p className="mb-4 text-sm text-mute">機器人每次都先用主版本回答；主版本出錯或太久沒回應，才依序改用備援。備援也失敗時，最後再試 Gemini 3.5 Flash Lite。</p>
         <div className="grid gap-3 md:grid-cols-3">
@@ -312,18 +416,19 @@ function AiTab() {
         ) : (
           <p className="mb-4 text-sm text-mute">還沒有紀錄（從這次更新之後開始記錄）。</p>
         )}
-        <Table head={["日期", "回答次數", "各版本", "改用備援"]}>
+        <Table head={["日期", "回答次數", "各版本", "改用備援", "Claude 花費（估）"]}>
           {week.map((d) => (
             <tr key={d.date}>
               <Td className="whitespace-nowrap">{d.date}</Td>
               <Td className="tabular-nums">{total(d)}</Td>
               <Td>{d.counts.map((c) => `${c.label} ${c.n}`).join("、")}</Td>
               <Td className={`tabular-nums ${d.fallback ? "font-bold text-[#8A4B00]" : "text-mute"}`}>{d.fallback}</Td>
+              <Td className="whitespace-nowrap tabular-nums">{usd(d.cost)}</Td>
             </tr>
           ))}
           {!week.length && (
             <tr>
-              <Td colSpan={4} className="py-6 text-center text-mute">
+              <Td colSpan={5} className="py-6 text-center text-mute">
                 還沒有紀錄
               </Td>
             </tr>
