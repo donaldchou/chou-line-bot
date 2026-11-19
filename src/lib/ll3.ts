@@ -179,6 +179,15 @@ export async function markNotified(sys: Sys, id: number, obts: string[]) {
   await call(sys, "notified", { form: { id: String(id), obts: obts.join(",") } });
 }
 
+/**
+ * cron 呼叫紀錄寫進 ll3 system.mdb Line_Cron_Api（/ll3_admin/admin.asp「API 排程狀態」讀）
+ * 一律送水蜜桃 /order/ 的 line_api.asp（system.mdb 兩系統共用）
+ * result：「關心狀態 ok|quiet|err|符合條件|已傳|失敗位數|群發已送|錯誤訊息」
+ */
+export async function logCronCall(kind: "ok" | "bad", result = "") {
+  await call("peach", "cronlog", { form: { kind, result: encText(result) }, timeout: 10_000 });
+}
+
 /** 託運單照片（JPG 原始檔） */
 export async function getWaybillJpg(sys: Sys, obt: string) {
   const url = new URL(`${sysBase(sys)}/line_api.asp`);

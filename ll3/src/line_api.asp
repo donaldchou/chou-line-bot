@@ -20,6 +20,8 @@ Response.CacheControl = "no-cache"
 '  line_api.asp?a=list    (POST)        管理後台：機器人建立的訂單（since＝起始日期，最多 100 筆）
 '  line_api.asp?a=jpg&obt=託運單號        託運單照片（image/jpeg）
 '  line_api.asp?a=notified (POST)       記錄已用 LINE 通知寄出：id、obts
+'  line_api.asp?a=cronlog  (POST)       機器人 cron 呼叫紀錄（只有水蜜桃 /order/ 會被呼叫）：kind=ok|bad、result
+'                                       寫進 system.mdb Line_Cron_Api，/ll3_admin/admin.asp「API 排程狀態」顯示
 '  文字參數：「x」＋UTF-16 hex（LineDec）
 '==================================================================
 Dim lnAct
@@ -227,6 +229,55 @@ Function LineOrderJson(oid, full)
 	End If
 	LineOrderJson = j & "}"
 End Function
+
+'---------- LINE 機器人 cron 呼叫紀錄：system.mdb Line_Cron_Api（只有一筆） ----------
+'  last_call 最後一次呼叫、last_result「關心狀態 ok|quiet|err|符合條件|已傳|失敗位數|群發已送|錯誤訊息」
+'  day_date／day_count 今天呼叫次數、total 累計、bad_key 最近一次錯誤 key 的呼叫
+Sub LineCronEnsure()
+	Dim rs
+	On Error Resume Next
+	Set rs = SudaSys().Execute("SELECT TOP 1 id FROM Line_Cron_Api")
+	If Err.Number = 0 Then
+		rs.Close
+		On Error GoTo 0
+		Exit Sub
+	End If
+	Err.Clear
+	On Error GoTo 0
+	SudaSys().Execute "CREATE TABLE Line_Cron_Api (id COUNTER CONSTRAINT pk_line_cron_api PRIMARY KEY, last_call DATETIME, last_result TEXT(255), day_date DATETIME, day_count LONG, total LONG, bad_key DATETIME, updated DATETIME)"
+End Sub
+
+Sub LineCronLog(kind, res)
+	Dim rs
+	LineCronEnsure
+	Set rs = Server.CreateObject("ADODB.Recordset")
+	rs.Open "SELECT TOP 1 * FROM Line_Cron_Api ORDER BY id", SudaSys(), 1, 3
+	If rs.EOF Then
+		rs.AddNew
+		rs("day_count") = 0
+		rs("total") = 0
+	End If
+	If kind = "bad" Then
+		rs("bad_key") = Now
+	Else
+		If IsDate(rs("day_date")) Then
+			If DateValue(rs("day_date")) = Date Then
+				rs("day_count") = CLng("0" & rs("day_count")) + 1
+			Else
+				rs("day_count") = 1
+			End If
+		Else
+			rs("day_count") = 1
+		End If
+		rs("day_date") = Date
+		rs("total") = CLng("0" & rs("total")) + 1
+		rs("last_call") = Now
+		rs("last_result") = Left(res, 255)
+	End If
+	rs("updated") = Now
+	rs.Update
+	rs.Close
+End Sub
 
 Dim oJ
 Select Case lnAct
@@ -499,6 +550,13 @@ Case "notified"
 	nObts = Left(Replace(Request.Form("obts") & "", "'", ""), 255)
 	If nId = 0 Then LineFail "id"
 	If LineEnsure(conn) Then conn.Execute "UPDATE Line_Order SET notified = Now(), notify_count = IIf(IsNull(notify_count), 0, notify_count) + 1, notify_obts = '" & nObts & "' WHERE orderid = " & nId
+	LineOut "{""ok"":true}"
+
+Case "cronlog"
+	Dim cKind
+	cKind = LCase(Request.Form("kind") & "")
+	If cKind <> "ok" And cKind <> "bad" Then LineFail "kind"
+	LineCronLog cKind, LineDec(Request.Form("result"))
 	LineOut "{""ok"":true}"
 
 Case Else
