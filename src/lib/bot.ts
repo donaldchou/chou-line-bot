@@ -639,6 +639,21 @@ const FARM_ASK = { pick: "可以去現場採果嗎？", nav: "農場在哪裡？
 export const PRICE_MENU_QUESTION ="請問想看水蜜桃還是甜柿？";
 export const PRICE_MENU_OPTIONS = ["水蜜桃價格運費", "甜柿價格運費"];
 
+/** 圖文選單「我要訂購」：先問哪一種水果；按鈕送出的文字對得上問答題目（照片會跟著傳） */
+export const BUY_MENU = /^我要(訂購|購買)[！!？?]?$/;
+export const BUY_MENU_QUESTION = "請問您要訂購什麼水果？";
+export const BUY_MENU_OPTIONS = ["我要訂水蜜桃", "我要訂甜柿"];
+
+/** 圖文選單「住宿周家旅館」：先給「查詢房價」「導航到旅館」兩個按鈕，不用呼叫 AI */
+export const HOTEL_MENU = /^(住宿)?周家旅館[！!？?]?$/;
+export const HOTEL_MENU_QUESTION = "歡迎入住拉拉山周家旅館！請問想了解哪一個？";
+const HOTEL_QUICK: QuickItem[] = [
+  { label: "查詢房價", data: "hotel:price" },
+  { label: "導航到旅館", data: "hotel:nav" },
+];
+/** 按了之後當成客人問這句（對得上問答題目） */
+const HOTEL_ASK = { price: "查詢房價", nav: "周家旅館在哪裡？" } as const;
+
 export async function handleText(user: LineUserDoc, text: string, replyToken?: string) {
   const userId = user._id;
   await LineUser.updateOne({ _id: userId }, { $set: { lastMessageAt: new Date() } });
@@ -675,6 +690,16 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
   if (ORDER_MENU.test(text.replace(/\s/g, ""))) {
     await send(userId, replyToken, [withQuickReply(textMsg(ORDER_MENU_QUESTION), MENU_SYSTEMS.map(sysQuick))]);
     await saveMsg(userId, "model", ORDER_MENU_QUESTION);
+    return;
+  }
+  if (BUY_MENU.test(text.replace(/\s/g, ""))) {
+    await send(userId, replyToken, [withQuickReply(textMsg(BUY_MENU_QUESTION), BUY_MENU_OPTIONS.map((label) => ({ label })))]);
+    await saveMsg(userId, "model", BUY_MENU_QUESTION);
+    return;
+  }
+  if (HOTEL_MENU.test(text.replace(/\s/g, ""))) {
+    await send(userId, replyToken, [withQuickReply(textMsg(HOTEL_MENU_QUESTION), HOTEL_QUICK)]);
+    await saveMsg(userId, "model", HOTEL_MENU_QUESTION);
     return;
   }
   void showLoading(userId, 30);
@@ -759,6 +784,7 @@ async function handlePostback(user: LineUserDoc, data: string, replyToken: strin
   }
 
   if (kind === "farm" && (a === "pick" || a === "nav")) return handleText(user, FARM_ASK[a], replyToken);
+  if (kind === "hotel" && (a === "price" || a === "nav")) return handleText(user, HOTEL_ASK[a], replyToken);
   if (kind === "lookup" && isSys(a)) return lookupAsk(user, a, replyToken);
   if (kind === "lookupme" && isSys(a)) return lookupMine(user, a, replyToken);
 
