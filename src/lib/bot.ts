@@ -111,16 +111,17 @@ const saveMsg = (userId: string, role: "user" | "model", text: string) => logMes
 
 /* ---------- 1. 加好友歡迎 ---------- */
 async function welcome(user: LineUserDoc, replyToken: string) {
-  const open: string[] = [];
-  await Promise.all(
-    SYSTEMS.map(async (s) => {
+  // 水蜜桃在前、甜柿在後（同時查，結果照固定順序排）
+  const isOpen = await Promise.all(
+    MENU_SYSTEMS.map(async (s) => {
       try {
-        if ((await getProducts(s)).open) open.push(SYS_INFO[s].label);
+        return (await getProducts(s)).open;
       } catch {
-        /* 連不到訂單系統時不顯示 */
+        return false; // 連不到訂單系統時不顯示
       }
     }),
   );
+  const open = MENU_SYSTEMS.filter((_, i) => isOpen[i]).map((s) => SYS_INFO[s].label);
   const text = `您好，歡迎加入${FARM.name}！
 我是農場的 AI 小幫手，可以幫您：
 ・介紹水蜜桃、甜柿
@@ -364,6 +365,8 @@ function rawHandlers(t: Turn): Record<string, ToolHandler> {
     },
 
     async send_product_photos(a) {
+      // 客人按的是選單按鈕（問答照片已經由程式附上）：不要再傳一排商品卡片
+      if (t.forcePhotosFor) return { sent: 0, note: "問答的產品照片和價格照片已經傳給客人了，不要再傳商品卡片，也不要說有傳卡片" };
       const sys = asSys(a.product);
       const ids = Array.isArray(a.product_ids) ? (a.product_ids as unknown[]).map(String) : [];
       const r = await getProducts(sys);
@@ -574,7 +577,9 @@ export const maskPhone = (p: string) => {
 
 /* 圖文選單「查詢訂單」：先選甜柿／水蜜桃，再用上次的電話或客人提供的姓名、電話查 */
 export const ORDER_MENU = /^(查詢?|查一下)(我的)?訂單[？?]?$/;
-export const ORDER_MENU_QUESTION = "請問要查詢甜柿還是水蜜桃的訂單？";
+export const ORDER_MENU_QUESTION = "請問要查詢水蜜桃還是甜柿的訂單？";
+/** 給客人選的按鈕：水蜜桃在前、甜柿在後 */
+const MENU_SYSTEMS: Sys[] = ["peach", "kaki"];
 const sysQuick = (sys: Sys): QuickItem => ({ label: `${SYS_INFO[sys].label}訂單`, data: `lookup:${sys}` });
 const otherSys = (sys: Sys): Sys => (sys === "kaki" ? "peach" : "kaki");
 
@@ -646,8 +651,8 @@ async function history(userId: string): Promise<Content[]> {
 
 /** 圖文選單「價格運費」（或客人只打「價格運費」）：先問哪一種水果，不用呼叫 AI */
 export const PRICE_MENU = /^(價格|價錢)[和與跟及、]?運費[？?]?$/;
-export const PRICE_MENU_QUESTION = "請問想看甜柿還是水蜜桃？";
-export const PRICE_MENU_OPTIONS = ["甜柿價格運費", "水蜜桃價格運費"];
+export const PRICE_MENU_QUESTION = "請問想看水蜜桃還是甜柿？";
+export const PRICE_MENU_OPTIONS = ["水蜜桃價格運費", "甜柿價格運費"];
 
 export async function handleText(user: LineUserDoc, text: string, replyToken?: string) {
   const userId = user._id;
@@ -678,7 +683,7 @@ export async function handleText(user: LineUserDoc, text: string, replyToken?: s
     return;
   }
   if (ORDER_MENU.test(text.replace(/\s/g, ""))) {
-    await send(userId, replyToken, [withQuickReply(textMsg(ORDER_MENU_QUESTION), SYSTEMS.map(sysQuick))]);
+    await send(userId, replyToken, [withQuickReply(textMsg(ORDER_MENU_QUESTION), MENU_SYSTEMS.map(sysQuick))]);
     await saveMsg(userId, "model", ORDER_MENU_QUESTION);
     return;
   }
