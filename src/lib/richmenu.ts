@@ -163,13 +163,13 @@ async function retireActive(exceptLineId?: string) {
   }
 }
 
-/** 換過的只留最近 10 個；ll3 上沒有任何選單用到的圖片刪掉（剛上傳 1 小時內的先留著） */
-async function prune() {
+/** 換過的只留最近 10 個；ll3 上沒有任何選單用到的圖片刪掉（剛上傳 graceMs 內的先留著，可能正在編輯） */
+async function prune(graceMs = 3600_000) {
   const old = await RichMenu.find({ status: "history" }).sort({ appliedAt: -1 }).skip(HISTORY_KEEP).select("_id").lean();
   if (old.length) await RichMenu.deleteMany({ _id: { $in: old.map((o) => o._id) } });
   const used = new Set((await RichMenu.find({}, { image: 1 }).lean()).map((d) => d.image));
   const files = await listMenuImages();
-  for (const f of files) if (!used.has(f.name) && Date.now() - f.at > 3600_000) await deleteMenuImage(f.name).catch(warn("delete image"));
+  for (const f of files) if (!used.has(f.name) && Date.now() - f.at > graceMs) await deleteMenuImage(f.name).catch(warn("delete image"));
 }
 
 /* ---------------- 動作 ---------------- */
@@ -230,6 +230,14 @@ export async function disableMenu() {
   await connectDB();
   await clearDefaultRichMenu();
   await retireActive();
+  await prune().catch(warn("prune"));
+}
+
+/** 刪除一個換過的選單（使用中、試看中的不能刪）；沒有其他選單用到的圖片會從 ll3 刪掉 */
+export async function deleteHistory(id: string) {
+  await connectDB();
+  const r = await RichMenu.deleteOne({ _id: id, status: "history" });
+  if (!r.deletedCount) throw new HttpError(404, "找不到這個選單，可能已經被刪掉");
   await prune().catch(warn("prune"));
 }
 

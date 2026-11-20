@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   cellLetter,
   cells,
@@ -18,7 +18,7 @@ import {
   type MenuView,
 } from "@/lib/richmenu-layout";
 import { Icon } from "../_ui/icons";
-import { call, Card, errMsg, Field, inputCls, PageHeader, smallBtn, UnlockTimer, useGatedAction } from "../_ui/kit";
+import { call, Card, errMsg, Field, inputCls, Modal, PageHeader, smallBtn, UnlockTimer, useGatedAction } from "../_ui/kit";
 import { useMe } from "../_ui/me";
 import { btn, card, ErrorBar, mdhm, usePoll } from "../_ui/ui";
 
@@ -75,6 +75,19 @@ export default function RichMenuPage() {
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");
+  /** 點圖放大的選單 */
+  const [zoom, setZoom] = useState<MenuView | null>(null);
+  // 成功訊息幾秒後自動消失（錯誤要按關閉）
+  useEffect(() => {
+    if (!msg) return;
+    const t = setTimeout(() => setMsg(""), 8000);
+    return () => clearTimeout(t);
+  }, [msg]);
+  /** 操作結果：顯示在畫面下方（按鈕在頁面下面，頁面上方的訊息看不到） */
+  const note = (text: string, isError = false) => {
+    setErr(isError ? text : "");
+    setMsg(isError ? "" : text);
+  };
 
   if (me && me.role !== "admin") {
     return (
@@ -131,8 +144,8 @@ export default function RichMenuPage() {
   /** 需要驗證碼的動作；圖片還沒傳到 ll3 的先傳 */
   async function send(action: "test" | "apply") {
     const problem = check();
-    if (problem) return setErr(problem);
-    setErr("");
+    if (problem) return note(problem, true);
+    note("");
     const done = await gated.run({
       title: action === "test" ? "傳到我的 LINE 試看看" : "換上 LINE（所有客人）",
       confirmLabel: action === "test" ? "傳到我的 LINE" : "換上 LINE",
@@ -141,47 +154,62 @@ export default function RichMenuPage() {
           ? `新選單只會出現在你綁定的 LINE（${d?.me.lineName || "你的手機"}），客人還是看到目前的選單。`
           : "所有客人的圖文選單會馬上換成這一個。",
       action: async (code) => {
-        let name = f.image!.name;
-        if (!name) {
-          name = await uploadImage(f.image!.file!, code);
-          setForm({ ...f, image: { ...f.image!, name } });
+        setBusy(action);
+        try {
+          let name = f.image!.name;
+          if (!name) {
+            name = await uploadImage(f.image!.file!, code);
+            setForm({ ...f, image: { ...f.image!, name } });
+          }
+          await call("/api/admin/richmenu", {
+            method: "POST",
+            code,
+            json: { action, layout: f.layout, name: f.name, areas: f.areas, chatBarText: f.chatBarText, selected: f.selected, image: name },
+          });
+          await reload();
+        } finally {
+          setBusy("");
         }
-        await call("/api/admin/richmenu", {
-          method: "POST",
-          code,
-          json: { action, layout: f.layout, name: f.name, areas: f.areas, chatBarText: f.chatBarText, selected: f.selected, image: name },
-        });
-        await reload();
       },
     });
-    if (done) setMsg(action === "test" ? "已傳到你的 LINE，打開周家農場的聊天室看看（沒出現的話關掉聊天室再打開）。" : "已換上 LINE，所有客人都會看到新的選單。");
+    if (done)
+      note(
+        action === "test"
+          ? "✓ 已傳到你的 LINE。打開周家農場的聊天室看看（沒出現的話關掉聊天室再打開）。"
+          : "✓ 已換上 LINE，所有客人都會看到新的選單。上面「目前使用中」已經更新。",
+      );
   }
 
-  async function gatedSimple(o: { title: string; message: string; confirmLabel: string; danger?: boolean; json: Record<string, unknown>; ok: string }) {
-    setErr("");
+  async function gatedSimple(o: { key: string; title: string; message: string; confirmLabel: string; danger?: boolean; json: Record<string, unknown>; ok: string }) {
+    note("");
     const done = await gated.run({
       title: o.title,
       message: o.message,
       confirmLabel: o.confirmLabel,
       danger: o.danger,
       action: async (code) => {
-        await call("/api/admin/richmenu", { method: "POST", code, json: o.json });
-        await reload();
+        setBusy(o.key);
+        try {
+          await call("/api/admin/richmenu", { method: "POST", code, json: o.json });
+          await reload();
+        } finally {
+          setBusy("");
+        }
       },
     });
-    if (done) setMsg(o.ok);
+    if (done) note(o.ok);
   }
 
   /** 不需要驗證碼的動作：綁定、解除綁定、結束試看 */
   async function plain(action: string, ok = "") {
     setBusy(action);
-    setErr("");
+    note("");
     try {
       await call("/api/admin/richmenu", { method: "POST", json: { action } });
       await reload();
-      setMsg(ok);
+      if (ok) note(ok);
     } catch (e) {
-      setErr(errMsg(e));
+      note(errMsg(e), true);
     } finally {
       setBusy("");
     }
@@ -201,12 +229,32 @@ export default function RichMenuPage() {
   return (
     <main className="px-4 pb-10 pt-5 md:px-8 md:pt-7">
       <PageHeader title="圖文選單" desc="客人在 LINE 聊天室下方看到的按鈕。在這裡換圖片、改每個按鈕按下去要做什麼。只有管理者看得到這一頁。" badge={<UnlockTimer />} />
-      <ErrorBar messages={[error, d?.lineError, err]} />
-      {msg && (
-        <div role="status" className="mb-4 rounded-xl border border-[#B7DEC6] bg-[#EEF7F1] px-4 py-3 text-sm text-[#17613E]">
-          {msg}
-        </div>
-      )}
+      <ErrorBar messages={[error, d?.lineError]} />
+      <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 lg:pl-[264px]">
+        {(busy === "test" || busy === "apply" || busy === "disable" || busy.startsWith("restore:") || busy.startsWith("delete:")) && (
+          <div className="pointer-events-auto flex items-center gap-2 rounded-xl bg-forest px-5 py-3 text-sm font-bold text-white shadow-xl">
+            <Spinner />
+            {busy === "test"
+              ? "正在傳到你的 LINE…（約 5～10 秒）"
+              : busy === "disable"
+                ? "正在停用…"
+                : busy.startsWith("delete:")
+                  ? "正在刪除…"
+                  : "正在換上 LINE…（約 5～10 秒）"}
+          </div>
+        )}
+        {!busy && (msg || err) && (
+          <div
+            role={err ? "alert" : "status"}
+            className={`pointer-events-auto flex max-w-2xl items-start gap-3 rounded-xl px-5 py-3 text-sm shadow-xl ${err ? "bg-[#B3261E] text-white" : "bg-[#17613E] text-white"}`}
+          >
+            <span className="font-bold">{err ? `沒有成功：${err}` : msg}</span>
+            <button type="button" aria-label="關閉" onClick={() => note("")} className="-mr-2 rounded p-0.5 hover:bg-white/20">
+              <Icon name="x" size={18} />
+            </button>
+          </div>
+        )}
+      </div>
 
       <div className="flex max-w-5xl flex-col gap-5">
         {d?.test && (
@@ -236,7 +284,7 @@ export default function RichMenuPage() {
           ) : d.active ? (
             <div className="flex flex-col gap-4">
               <div className="flex flex-wrap items-start gap-5">
-                <MenuImage m={d.active} className="w-full max-w-[520px] flex-[1_1_380px]" />
+                <MenuImage m={d.active} className="w-full max-w-[520px] flex-[1_1_380px]" onOpen={() => setZoom(d.active)} />
                 <dl className="grid flex-[1_1_240px] grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
                   <dt className="text-mute">名稱</dt>
                   <dd>{d.active.name}</dd>
@@ -258,8 +306,10 @@ export default function RichMenuPage() {
                 <button
                   type="button"
                   className={`${smallBtn("danger")} min-h-11 border border-line px-3.5`}
+                  disabled={!!busy}
                   onClick={() =>
                     void gatedSimple({
+                      key: "disable",
                       title: "停用圖文選單",
                       message: "停用後，所有客人會改看到 LINE 官方帳號後台設定的選單（後台沒有設定的話就沒有選單）。這個選單會留在下面「換過的選單」，可以再換回來。",
                       confirmLabel: "停用",
@@ -269,7 +319,7 @@ export default function RichMenuPage() {
                     })
                   }
                 >
-                  停用，改回 LINE 後台的選單
+                  {busy === "disable" ? "停用中…" : "停用，改回 LINE 後台的選單"}
                 </button>
               </div>
             </div>
@@ -452,11 +502,23 @@ export default function RichMenuPage() {
             <BindBox d={d} busy={busy} plain={plain} />
             <div className="flex flex-wrap items-center justify-end gap-3">
               <p className="mr-auto flex-[1_1_280px] text-sm text-mute">建議先「傳到我的 LINE」試按每一格，沒問題再換上給所有客人。</p>
-              <button type="button" className={`${btn()} border-leaf text-leaf`} disabled={!d?.me.bound} onClick={() => void send("test")} title={d?.me.bound ? undefined : "請先綁定你的 LINE"}>
-                <Icon name="phone" size={16} /> 傳到我的 LINE 試看看
+              <button
+                type="button"
+                className={`${btn()} border-leaf text-leaf`}
+                disabled={!d?.me.bound || !!busy}
+                onClick={() => void send("test")}
+                title={d?.me.bound ? undefined : "請先綁定你的 LINE"}
+              >
+                {busy === "test" ? <Spinner /> : <Icon name="phone" size={16} />} {busy === "test" ? "傳送中…" : "傳到我的 LINE 試看看"}
               </button>
-              <button type="button" className={btn("pri")} onClick={() => void send("apply")}>
-                換上 LINE（所有客人）
+              <button type="button" className={btn("pri")} disabled={!!busy} onClick={() => void send("apply")}>
+                {busy === "apply" ? (
+                  <>
+                    <Spinner /> 換上中…
+                  </>
+                ) : (
+                  "換上 LINE（所有客人）"
+                )}
               </button>
             </div>
           </div>
@@ -469,7 +531,7 @@ export default function RichMenuPage() {
             <div className="flex flex-col gap-3">
               {d.history.map((h) => (
                 <div key={h.id} className="flex flex-wrap items-center gap-4 rounded-xl border border-line2 p-3">
-                  <MenuImage m={h} className="w-[180px]" />
+                  <MenuImage m={h} className="w-[180px]" onOpen={() => setZoom(h)} />
                   <div className="min-w-0 flex-[1_1_200px]">
                     <div className="font-bold">{h.name}</div>
                     <div className="text-[13px] text-mute">
@@ -483,17 +545,44 @@ export default function RichMenuPage() {
                     <button
                       type="button"
                       className={`${btn()} border-leaf text-leaf`}
+                      disabled={!!busy}
                       onClick={() =>
                         void gatedSimple({
+                          key: `restore:${h.id}`,
                           title: "換回這個選單",
                           message: `所有客人的圖文選單會馬上換回「${h.name}」。`,
                           confirmLabel: "換回",
                           json: { action: "restore", id: h.id },
-                          ok: `已換回「${h.name}」。`,
+                          ok: `✓ 已換回「${h.name}」，所有客人都會看到這個選單。`,
                         })
                       }
                     >
-                      換回這個
+                      {busy === `restore:${h.id}` ? (
+                        <>
+                          <Spinner /> 換回中…
+                        </>
+                      ) : (
+                        "換回這個"
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${smallBtn("danger")} min-h-11`}
+                      disabled={!!busy}
+                      aria-label={`刪除「${h.name}」`}
+                      onClick={() =>
+                        void gatedSimple({
+                          key: `delete:${h.id}`,
+                          title: "刪除這個選單",
+                          message: `確定要刪除「${h.name}」（${mdhm(h.appliedAt)} 換上）嗎？刪除後就不能換回了。`,
+                          confirmLabel: "刪除",
+                          danger: true,
+                          json: { action: "delete", id: h.id },
+                          ok: `✓ 已刪除「${h.name}」。`,
+                        })
+                      }
+                    >
+                      {busy === `delete:${h.id}` ? <Spinner /> : <Icon name="trash" size={16} />} 刪除
                     </button>
                   </div>
                 </div>
@@ -502,9 +591,25 @@ export default function RichMenuPage() {
           )}
         </Card>
       </div>
+      {zoom && (
+        <Modal wide title={zoom.name} onClose={() => setZoom(null)}>
+          <div className="flex flex-col gap-4">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={imgSrc(zoom.image)} alt={`圖文選單：${zoom.areas.map((a) => a.value).join("、")}`} className="block w-full rounded-lg border border-line" />
+            <p className="text-sm text-mute">
+              {layoutLabel(zoom.layout)}（{zoom.width} × {zoom.height}）・選單列文字「{zoom.chatBarText}」・{mdhm(zoom.appliedAt)} 換上・{zoom.appliedBy}
+            </p>
+            <AreaList m={zoom} />
+          </div>
+        </Modal>
+      )}
       {gated.dialog}
     </main>
   );
+}
+
+function Spinner() {
+  return <span aria-hidden="true" className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />;
 }
 
 function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
@@ -519,13 +624,19 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
   );
 }
 
-/** 選單圖片＋格子字母 */
-function MenuImage({ m, className }: { m: MenuView; className?: string }) {
+/** 選單圖片；有 onOpen 時可以點開放大 */
+function MenuImage({ m, className, onOpen }: { m: MenuView; className?: string; onOpen?: () => void }) {
+  const alt = `圖文選單：${m.areas.map((a) => a.value).join("、")}`;
+  // eslint-disable-next-line @next/next/no-img-element
+  const img = <img src={imgSrc(m.image)} alt={alt} className="block w-full rounded-lg border border-line" />;
+  if (!onOpen) return <div className={className}>{img}</div>;
   return (
-    <div className={`relative ${className ?? ""}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={imgSrc(m.image)} alt={`圖文選單：${m.areas.map((a) => a.value).join("、")}`} className="block w-full rounded-lg border border-line" />
-    </div>
+    <button type="button" onClick={onOpen} title="點一下放大" aria-label={`放大「${m.name}」`} className={`group relative cursor-zoom-in ${className ?? ""}`}>
+      {img}
+      <span className="absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] text-white opacity-80 group-hover:opacity-100">
+        <Icon name="search" size={12} /> 放大
+      </span>
+    </button>
   );
 }
 
