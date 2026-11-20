@@ -9,6 +9,7 @@ import {
   isLayout,
   LAYOUT_KEYS,
   LAYOUTS,
+  layoutLabel,
   MAX_MENU_IMAGE,
   NAME_MAX,
   qaKey,
@@ -25,7 +26,6 @@ import { btn, card, ErrorBar, mdhm, usePoll } from "../_ui/ui";
 /* 後台「圖文選單」：換 LINE 聊天室下方的選單圖片、設定每一格按下去做什麼（只有管理者） */
 
 const imgSrc = (name: string) => `/api/admin/richmenu/image?n=${name}`;
-const layoutLabel = (k: string) => (isLayout(k) ? LAYOUTS[k].label : "自訂格子");
 
 type Img = { name: string | null; file: File | null; url: string; width: number; height: number; kb: number; fileName: string };
 type Form = { layout: LayoutKey; name: string; areas: AreaAction[]; chatBarText: string; selected: boolean; image: Img | null };
@@ -524,7 +524,7 @@ export default function RichMenuPage() {
           </div>
         </section>
 
-        <Card title="換過的選單">
+        <Card title="換過的選單" action={<span className="text-xs text-mute">最多留 {HISTORY_KEEP} 個，多的和刪除的會移到「後台管理 › 已刪除紀錄」</span>}>
           {!d?.history.length ? (
             <p className="py-2 text-sm text-mute">還沒有。以後換掉的選單會留在這裡（最近 {HISTORY_KEEP} 個），一鍵就能換回去。</p>
           ) : (
@@ -574,11 +574,11 @@ export default function RichMenuPage() {
                         void gatedSimple({
                           key: `delete:${h.id}`,
                           title: "刪除這個選單",
-                          message: `確定要刪除「${h.name}」（${mdhm(h.appliedAt)} 換上）嗎？刪除後就不能換回了。`,
+                          message: `確定要刪除「${h.name}」（${mdhm(h.appliedAt)} 換上）嗎？會移到「後台管理 › 已刪除紀錄」，需要時可以從那裡還原。`,
                           confirmLabel: "刪除",
                           danger: true,
                           json: { action: "delete", id: h.id },
-                          ok: `✓ 已刪除「${h.name}」。`,
+                          ok: `✓ 已刪除「${h.name}」，移到後台管理的「已刪除紀錄」。`,
                         })
                       }
                     >

@@ -23,7 +23,7 @@ export async function GET(req: Request) {
  *   test     （表單）傳到我的 LINE 試看          需要驗證碼
  *   apply    （表單）換上 LINE（所有客人）        需要驗證碼
  *   restore  { id } 換回以前的選單               需要驗證碼
- *   delete   { id } 刪除換過的選單               需要驗證碼
+ *   delete   { id } 刪除換過的選單（移到後台管理的已刪除紀錄）  需要驗證碼
  *   disable  停用，改回 LINE 官方帳號後台的選單   需要驗證碼
  *   endTest  結束試看
  *   bind / unbind  綁定／解除綁定我的 LINE
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
         break;
       case "delete":
         await assertCode(req, user, "刪除這個選單");
-        await deleteHistory(String(body.id ?? ""));
+        await deleteHistory(String(body.id ?? ""), user);
         break;
       case "disable":
         await assertCode(req, user, "停用圖文選單");

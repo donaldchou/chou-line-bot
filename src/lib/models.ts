@@ -436,7 +436,7 @@ export const RichMenu = (models.RichMenu as Model<RichMenuDoc>) || model<RichMen
 const AdminSettingSchema = new Schema({ _id: { type: String, required: true }, allowed: [String] }, { versionKey: false, strict: false });
 
 /** 已刪除紀錄（同 chou-platform）：刪除時先備份到這裡，後台管理可以還原或永久刪除 */
-export const TRASH_KINDS = ["qa"] as const;
+export const TRASH_KINDS = ["qa", "richmenu"] as const;
 export type TrashKind = (typeof TRASH_KINDS)[number];
 export interface TrashDoc {
   _id: string;

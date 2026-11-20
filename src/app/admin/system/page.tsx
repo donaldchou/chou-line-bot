@@ -84,6 +84,7 @@ async function verifyCode(code: string): Promise<CodeResult> {
   }
 }
 
+const menuImg = (name: string) => `/api/admin/richmenu/image?n=${name}`;
 const fmtTime = (s: string | null) => (s ? new Date(s).toLocaleString("zh-TW", { hour12: false, timeZone: "Asia/Taipei" }) : "—");
 
 /* ---------------- 已刪除紀錄（問答管理；同 chou-platform） ---------------- */
@@ -104,15 +105,26 @@ function TrashTab() {
       title: restore ? "還原紀錄" : "永久刪除",
       confirmLabel: restore ? "確認還原" : "確認永久刪除",
       danger: !restore,
-      message: restore ? (
-        <>
-          即將還原問答「<b>{t.q}</b>」，還原後會回到問答管理，機器人馬上會用。
-        </>
-      ) : (
-        <>
-          即將永久刪除問答「<b>{t.q}</b>」的備份（連同照片），之後無法再還原。
-        </>
-      ),
+      message:
+        t.kind === "richmenu" ? (
+          restore ? (
+            <>
+              即將還原圖文選單「<b>{t.q}</b>」，會回到圖文選單頁的「換過的選單」（不會換上 LINE，要用時再按「換回這個」）。
+            </>
+          ) : (
+            <>
+              即將永久刪除圖文選單「<b>{t.q}</b>」（連同沒有其他選單在用的圖片），之後無法再還原。
+            </>
+          )
+        ) : restore ? (
+          <>
+            即將還原問答「<b>{t.q}</b>」，還原後會回到問答管理，機器人馬上會用。
+          </>
+        ) : (
+          <>
+            即將永久刪除問答「<b>{t.q}</b>」的備份（連同照片），之後無法再還原。
+          </>
+        ),
       submit: async (code) => {
         try {
           const r = await call<{ note?: string }>(`/api/admin/system/trash/${t.id}`, { method, code });
@@ -129,18 +141,35 @@ function TrashTab() {
 
   return (
     <>
-      <p className="mb-4 text-sm text-mute">在問答管理刪除的問答會備份在這裡，可以還原或永久刪除。照片在永久刪除前都會保留。</p>
+      <p className="mb-4 text-sm text-mute">
+        在問答管理刪除的問答、圖文選單刪除的選單（和「換過的選單」超過 10 個被移出的）會備份在這裡，可以還原或永久刪除。照片、圖片在永久刪除前都會保留。
+      </p>
       {notice && <p className="mb-4 rounded-lg bg-[#DFF2E7] px-4 py-2.5 text-sm font-bold text-[#17613E]">{notice}</p>}
       <ErrorBar messages={[error]} />
-      <Table head={["類型", "客人問", "分類", "照片", "刪除時間", "刪除者", ""]}>
+      <Table head={["類型", "客人問／選單名稱", "分類／版型", "照片", "刪除時間", "刪除者", ""]}>
         {(items ?? []).map((t) => (
           <tr key={t.id} className="hover:bg-[#FAFBF8]">
             <Td className="whitespace-nowrap">
-              <span className="rounded-full bg-[#E6F2EB] px-2 py-0.5 text-xs font-bold text-leaf">問答管理</span>
+              {t.kind === "richmenu" ? (
+                <span className="rounded-full bg-[#E3ECF7] px-2 py-0.5 text-xs font-bold text-[#1D4E8F]">圖文選單</span>
+              ) : (
+                <span className="rounded-full bg-[#E6F2EB] px-2 py-0.5 text-xs font-bold text-leaf">問答管理</span>
+              )}
             </Td>
             <Td className="font-bold">{t.q || "—"}</Td>
             <Td className="whitespace-nowrap">{t.catGone ? <span className="text-[#B3261E]">（分類已刪除）</span> : t.catName}</Td>
-            <Td className="whitespace-nowrap text-mute">{t.photos ? `${t.photos} 張` : "—"}</Td>
+            <Td className="whitespace-nowrap text-mute">
+              {t.kind === "richmenu" && t.image ? (
+                <button type="button" onClick={() => setViewing(t)} className="block w-28 cursor-zoom-in" aria-label={`放大「${t.q}」`}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={menuImg(t.image)} alt="" className="block w-full rounded border border-line" />
+                </button>
+              ) : t.photos ? (
+                `${t.photos} 張`
+              ) : (
+                "—"
+              )}
+            </Td>
             <Td className="whitespace-nowrap text-mute">{fmtTime(t.deletedAt)}</Td>
             <Td className="whitespace-nowrap text-mute">{t.deletedBy || "—"}</Td>
             <Td className="whitespace-nowrap text-right">
@@ -184,14 +213,33 @@ function TrashTab() {
             </>
           }
         >
-          <dl className="mb-4 grid grid-cols-[72px_1fr] gap-x-3 gap-y-1.5 text-sm">
-            <dt className="text-mute">分類</dt>
-            <dd>{viewing.catGone ? "（分類已刪除，還原時放到第一個分類）" : viewing.catName}</dd>
-            <dt className="text-mute">回答</dt>
-            <dd className="whitespace-pre-wrap">{viewing.answer || "—"}</dd>
-            <dt className="text-mute">照片</dt>
-            <dd>{viewing.photos ? `${viewing.photos} 張` : "—"}</dd>
-          </dl>
+          {viewing.kind === "richmenu" ? (
+            <div className="mb-4 flex flex-col gap-3 text-sm">
+              {viewing.image && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={menuImg(viewing.image)} alt={`圖文選單「${viewing.q}」`} className="block w-full rounded-lg border border-line" />
+              )}
+              <dl className="grid grid-cols-[72px_1fr] gap-x-3 gap-y-1.5">
+                <dt className="text-mute">版型</dt>
+                <dd>{viewing.catName}</dd>
+                <dt className="text-mute">每一格</dt>
+                <dd className="whitespace-pre-wrap">{viewing.answer || "—"}</dd>
+                <dt className="text-mute">刪除</dt>
+                <dd>
+                  {fmtTime(viewing.deletedAt)}・{viewing.deletedBy || "—"}
+                </dd>
+              </dl>
+            </div>
+          ) : (
+            <dl className="mb-4 grid grid-cols-[72px_1fr] gap-x-3 gap-y-1.5 text-sm">
+              <dt className="text-mute">分類</dt>
+              <dd>{viewing.catGone ? "（分類已刪除，還原時放到第一個分類）" : viewing.catName}</dd>
+              <dt className="text-mute">回答</dt>
+              <dd className="whitespace-pre-wrap">{viewing.answer || "—"}</dd>
+              <dt className="text-mute">照片</dt>
+              <dd>{viewing.photos ? `${viewing.photos} 張` : "—"}</dd>
+            </dl>
+          )}
           <details>
             <summary className="cursor-pointer text-sm text-mute">原始資料</summary>
             <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-white p-4 font-mono text-xs ring-1 ring-line">{JSON.stringify(viewing.data, null, 2)}</pre>

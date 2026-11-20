@@ -23,7 +23,9 @@ export function cells(layout: LayoutKey) {
   return out;
 }
 
-export const cellLetter = (i: number) => String.fromCharCode(65 + i);
+export const layoutLabel = (k: string) => (isLayout(k) ? LAYOUTS[k].label : "自訂格子");
+
+export const cellLetter =(i: number) => String.fromCharCode(65 + i);
 
 /** 圖片大小上限（LINE 規定 1MB） */
 export const MAX_MENU_IMAGE = 1_000_000;

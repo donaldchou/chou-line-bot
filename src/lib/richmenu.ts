@@ -1,7 +1,8 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { HttpError, type PublicUser } from "./auth";
 import { connectDB } from "./mongodb";
-import { AdminUser, QaItem, RichMenu, type RichMenuDoc } from "./models";
+import { AdminUser, QaItem, RichMenu, Trash, type RichMenuDoc, type TrashDoc } from "./models";
+import type { TrashView } from "./qa";
 import { MENU_COMMANDS } from "./bot";
 import {
   clearDefaultRichMenu,
@@ -18,7 +19,9 @@ import {
 } from "./line";
 import { deleteMenuImage, getMenuImage, listMenuImages, MENU_IMAGE_NAME, putMenuImage } from "./ll3-file";
 import {
+  cellLetter,
   cells,
+  layoutLabel,
   CHAT_BAR_MAX,
   HISTORY_KEEP,
   isLayout,
@@ -163,11 +166,27 @@ async function retireActive(exceptLineId?: string) {
   }
 }
 
-/** 換過的只留最近 10 個；ll3 上沒有任何選單用到的圖片刪掉（剛上傳 graceMs 內的先留著，可能正在編輯） */
-async function prune(graceMs = 3600_000) {
-  const old = await RichMenu.find({ status: "history" }).sort({ appliedAt: -1 }).skip(HISTORY_KEEP).select("_id").lean();
-  if (old.length) await RichMenu.deleteMany({ _id: { $in: old.map((o) => o._id) } });
-  const used = new Set((await RichMenu.find({}, { image: 1 }).lean()).map((d) => d.image));
+/** 移到「後台管理 › 已刪除紀錄」（圖片留在 ll3，永久刪除時才清掉） */
+async function moveToTrash(d: RichMenuDoc, by: string) {
+  await Trash.create({ _id: newId(), kind: "richmenu", docId: d._id, data: { ...d, lineId: null, testUser: null }, deletedAt: new Date(), deletedBy: by });
+  await RichMenu.deleteOne({ _id: d._id });
+}
+
+/**
+ * 換過的只留最近 10 個，多的移到已刪除紀錄（keepId：剛還原的那個不要馬上又被移走）；
+ * ll3 上沒有任何選單（含已刪除紀錄）用到的圖片刪掉（剛上傳 graceMs 內的先留著，可能正在編輯）
+ */
+async function prune(graceMs = 3600_000, keepId?: string) {
+  const hist = await RichMenu.find({ status: "history" }).sort({ appliedAt: -1 }).lean();
+  const extra = hist.length - HISTORY_KEEP;
+  if (extra > 0) {
+    const old = hist.filter((h) => h._id !== keepId).slice(-extra);
+    for (const o of old) await moveToTrash(o, `（換過的選單超過 ${HISTORY_KEEP} 個，自動移到這裡）`);
+  }
+  const used = new Set([
+    ...(await RichMenu.find({}, { image: 1 }).lean()).map((d) => d.image),
+    ...(await Trash.find({ kind: "richmenu" }, { "data.image": 1 }).lean<{ data?: { image?: string } }[]>()).map((t) => String(t.data?.image ?? "")),
+  ]);
   const files = await listMenuImages();
   for (const f of files) if (!used.has(f.name) && Date.now() - f.at > graceMs) await deleteMenuImage(f.name).catch(warn("delete image"));
 }
@@ -233,12 +252,61 @@ export async function disableMenu() {
   await prune().catch(warn("prune"));
 }
 
-/** 刪除一個換過的選單（使用中、試看中的不能刪）；沒有其他選單用到的圖片會從 ll3 刪掉 */
-export async function deleteHistory(id: string) {
+/** 刪除一個換過的選單（使用中、試看中的不能刪）：移到「後台管理 › 已刪除紀錄」，可以還原 */
+export async function deleteHistory(id: string, user: PublicUser) {
   await connectDB();
-  const r = await RichMenu.deleteOne({ _id: id, status: "history" });
-  if (!r.deletedCount) throw new HttpError(404, "找不到這個選單，可能已經被刪掉");
-  await prune().catch(warn("prune"));
+  const d = await RichMenu.findOne({ _id: id, status: "history" }).lean();
+  if (!d) throw new HttpError(404, "找不到這個選單，可能已經被刪掉");
+  await moveToTrash(d, user.email);
+}
+
+/* ---------------- 已刪除紀錄（後台管理） ---------------- */
+
+export async function menuTrashList(): Promise<TrashView[]> {
+  await connectDB();
+  const rows = await Trash.find({ kind: "richmenu" }).sort({ deletedAt: -1 }).limit(500).lean<TrashDoc[]>();
+  return rows.map((t) => {
+    const d = t.data as Partial<RichMenuDoc>;
+    return {
+      id: t._id,
+      kind: "richmenu",
+      image: d.image,
+      q: d.name ?? "",
+      cat: d.layout ?? "",
+      catName: `${layoutLabel(d.layout ?? "")}（${d.width} × ${d.height}）`,
+      catGone: false,
+      answer: (d.areas ?? []).map((a, i) => `${cellLetter(i)}　${a.type === "uri" ? "開網址" : "傳送"}　${a.value}`).join("\n"),
+      photos: 1,
+      deletedAt: new Date(t.deletedAt).toISOString(),
+      deletedBy: t.deletedBy,
+      data: t.data,
+    };
+  });
+}
+
+/** 還原：回到「換過的選單」（不會換上 LINE） */
+export async function restoreMenuTrash(id: string) {
+  await connectDB();
+  const t = await Trash.findOne({ _id: id, kind: "richmenu" }).lean<TrashDoc>();
+  if (!t) throw new HttpError(404, "找不到這筆已刪除紀錄（可能已經還原或永久刪除）");
+  if (await RichMenu.exists({ _id: t.docId })) throw new HttpError(400, "圖文選單裡已經有這個選單，不能重複還原");
+  const d = t.data as unknown as RichMenuDoc;
+  if (!(await getMenuImage(d.image))) throw new HttpError(400, "ll3 上找不到這個選單的圖片，無法還原");
+  await RichMenu.create({ ...d, _id: t.docId, status: "history", lineId: null, testUser: null });
+  await Trash.deleteOne({ _id: id });
+  const full = (await RichMenu.countDocuments({ status: "history" })) > HISTORY_KEEP;
+  await prune(3600_000, t.docId).catch(warn("prune"));
+  return { note: full ? `換過的選單超過 ${HISTORY_KEEP} 個，最舊的那個已移到已刪除紀錄` : "" };
+}
+
+/** 永久刪除：連同沒有其他選單用到的圖片 */
+export async function purgeMenuTrash(id: string) {
+  await connectDB();
+  const t = await Trash.findOneAndDelete({ _id: id, kind: "richmenu" }).lean<TrashDoc>();
+  if (!t) throw new HttpError(404, "找不到這筆已刪除紀錄");
+  const image = String((t.data as { image?: string }).image ?? "");
+  const inUse = (await RichMenu.exists({ image })) || (await Trash.exists({ kind: "richmenu", "data.image": image }));
+  if (!inUse) await deleteMenuImage(image).catch(warn("delete image"));
 }
 
 /* ---------------- 綁定 LINE ---------------- */

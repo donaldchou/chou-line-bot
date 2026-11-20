@@ -252,9 +252,11 @@ export async function deleteItem(id: string, by: string) {
 
 /* ---------------- 已刪除紀錄 ---------------- */
 
+/** 已刪除紀錄的一筆：問答（q＝題目）或圖文選單（q＝名稱、catName＝版型、answer＝每一格、image＝圖片） */
 export type TrashView = {
   id: string;
-  kind: "qa";
+  kind: "qa" | "richmenu";
+  image?: string;
   q: string;
   cat: string;
   catName: string;
@@ -291,7 +293,7 @@ export async function trashList(): Promise<TrashView[]> {
 /** 還原：用原本的 id 寫回；分類已經刪掉時放到第一個分類 */
 export async function restoreTrash(id: string, by: string) {
   await connectDB();
-  const t = await Trash.findById(id).lean<TrashDoc>();
+  const t = await Trash.findOne({ _id: id, kind: "qa" }).lean<TrashDoc>();
   if (!t) throw new QaError("找不到這筆已刪除紀錄（可能已經還原或永久刪除）");
   if (await QaItem.exists({ _id: t.docId })) throw new QaError("問答管理裡已經有這則問答，不能重複還原");
   const data = { ...(t.data as Partial<QaItemDoc>) };
@@ -310,7 +312,7 @@ export async function restoreTrash(id: string, by: string) {
 /** 永久刪除：連同沒有其他問答使用的照片 */
 export async function purgeTrash(id: string) {
   await connectDB();
-  const t = await Trash.findOneAndDelete({ _id: id }).lean<TrashDoc>();
+  const t = await Trash.findOneAndDelete({ _id: id, kind: "qa" }).lean<TrashDoc>();
   if (!t) throw new QaError("找不到這筆已刪除紀錄");
   await cleanupPhotos(photosOf(t.data as Partial<QaItemDoc>));
 }
