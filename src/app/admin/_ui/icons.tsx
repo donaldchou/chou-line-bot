@@ -115,6 +115,19 @@ const P: Record<string, React.ReactNode> = {
     </>
   ),
   edit: <path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" />,
+  layout: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 12h18M9 12v9M15 12v9" />
+    </>
+  ),
+  upload: <path d="M12 16V4M7 9l5-5 5 5M4 20h16" />,
+  phone: (
+    <>
+      <rect x="7" y="2" width="10" height="20" rx="2" />
+      <path d="M11 18h2" />
+    </>
+  ),
   arrowUp: <path d="M12 19V5M6 11l6-6 6 6" />,
   arrowDown: <path d="M12 5v14M6 13l6 6 6-6" />,
   refresh: (

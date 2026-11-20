@@ -22,8 +22,8 @@ export function proxy(req: NextRequest) {
     return res;
   }
 
-  // 後台管理只給管理者
-  if (session.role !== "admin" && /^\/admin\/system(\/|$)/.test(pathname)) {
+  // 後台管理、圖文選單只給管理者
+  if (session.role !== "admin" && /^\/admin\/(system|richmenu)(\/|$)/.test(pathname)) {
     return NextResponse.redirect(new URL("/admin", req.url));
   }
   return NextResponse.next();

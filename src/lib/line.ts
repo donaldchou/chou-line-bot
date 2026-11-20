@@ -95,6 +95,85 @@ export async function getProfile(userId: string): Promise<{ displayName: string;
   }
 }
 
+/* ---------- 圖文選單（rich menu） ---------- */
+
+const DATA_API = "https://api-data.line.me/v2/bot";
+
+export type RichMenuAction = { type: "message"; label?: string; text: string } | { type: "uri"; label?: string; uri: string };
+export interface RichMenuBody {
+  size: { width: number; height: number };
+  selected: boolean;
+  name: string;
+  chatBarText: string;
+  areas: { bounds: { x: number; y: number; width: number; height: number }; action: RichMenuAction }[];
+}
+
+async function rm(path: string, init: RequestInit = {}, base = API) {
+  const res = await fetch(`${base}${path}`, {
+    ...init,
+    headers: { authorization: `Bearer ${token()}`, ...(init.headers ?? {}) },
+    signal: AbortSignal.timeout(20_000),
+  });
+  return res;
+}
+
+async function rmOk(path: string, init: RequestInit = {}, base = API) {
+  const res = await rm(path, init, base);
+  if (!res.ok) throw new Error(`LINE 圖文選單 ${path} HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return res;
+}
+
+/** 建立選單（先檢查格式），回傳 richMenuId */
+export async function createRichMenu(body: RichMenuBody) {
+  const json = { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+  await rmOk("/richmenu/validate", json);
+  const d = (await (await rmOk("/richmenu", json)).json()) as { richMenuId: string };
+  return d.richMenuId;
+}
+
+export async function uploadRichMenuImage(id: string, bytes: Uint8Array, type: "image/png" | "image/jpeg") {
+  await rmOk(`/richmenu/${id}/content`, { method: "POST", headers: { "content-type": type }, body: bytes as BodyInit }, DATA_API);
+}
+
+export async function downloadRichMenuImage(id: string) {
+  const res = await rmOk(`/richmenu/${id}/content`, {}, DATA_API);
+  return { bytes: new Uint8Array(await res.arrayBuffer()), type: res.headers.get("content-type") ?? "" };
+}
+
+export async function getRichMenu(id: string) {
+  return (await (await rmOk(`/richmenu/${id}`)).json()) as RichMenuBody & { richMenuId: string };
+}
+
+/** 刪除選單；已經不在了也算成功 */
+export async function deleteRichMenu(id: string) {
+  const res = await rm(`/richmenu/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error(`LINE 刪除圖文選單 HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+}
+
+/** 所有客人的預設選單（用程式設定的）；沒有、或是 LINE 官方帳號後台設定的 → null */
+export async function getDefaultRichMenuId() {
+  const res = await rm("/user/all/richmenu");
+  if (res.status === 404 || res.status === 403) return null;
+  if (!res.ok) throw new Error(`LINE 讀取預設圖文選單 HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return ((await res.json()) as { richMenuId: string }).richMenuId;
+}
+
+export const setDefaultRichMenu = (id: string) => rmOk(`/user/all/richmenu/${id}`, { method: "POST" }).then(() => {});
+
+/** 拿掉程式設定的預設選單（客人會改看到 LINE 官方帳號後台設定的選單） */
+export async function clearDefaultRichMenu() {
+  const res = await rm("/user/all/richmenu", { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error(`LINE 停用預設圖文選單 HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+}
+
+/** 只給一個人看的選單（優先於預設選單） */
+export const linkUserRichMenu = (userId: string, id: string) => rmOk(`/user/${userId}/richmenu/${id}`, { method: "POST" }).then(() => {});
+
+export async function unlinkUserRichMenu(userId: string) {
+  const res = await rm(`/user/${userId}/richmenu`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error(`LINE 取消個人圖文選單 HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+}
+
 /* ---------- 訊息 ---------- */
 
 export const textMsg = (text: string): LineMessage => ({ type: "text", text: text.slice(0, 5000) });

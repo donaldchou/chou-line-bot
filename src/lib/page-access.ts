@@ -21,6 +21,8 @@ export const pageHref = (k: PageKey) => USER_PAGES.find((p) => p.key === k)!.hre
 
 /** 只有管理者能進的頁面 */
 export const SYSTEM_HREF = "/admin/system";
+/** 圖文選單（只有管理者，放在選單「機器人」分組） */
+export const RICHMENU_HREF = "/admin/richmenu";
 
 /** 網址屬於哪個頁面；不屬於任何一個（後台管理）回 null */
 export function pageOfPath(path: string): PageKey | null {

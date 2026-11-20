@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { connectDB } from "./mongodb";
 import {
+  AdminUser,
   AlertLog,
   ChatMessage,
   LineUser,
@@ -654,9 +655,37 @@ const HOTEL_QUICK: QuickItem[] = [
 /** 按了之後當成客人問這句（對得上問答題目） */
 const HOTEL_ASK = { price: "查詢房價", nav: "周家旅館在哪裡？" } as const;
 
+/** 機器人固定回覆的指令（後台「圖文選單」讓管理者挑按鈕要傳的文字） */
+export const MENU_COMMANDS: { text: string; re: RegExp; desc: string }[] = [
+  { text: "我要訂購", re: BUY_MENU, desc: "問要訂水蜜桃還是甜柿" },
+  { text: "價格與運費", re: PRICE_MENU, desc: "問要看水蜜桃還是甜柿的價格" },
+  { text: "現場採果", re: FARM_MENU, desc: "採果介紹／導航到農場" },
+  { text: "查詢訂單", re: ORDER_MENU, desc: "查水蜜桃／甜柿訂單" },
+  { text: "住宿周家旅館", re: HOTEL_MENU, desc: "查詢房價／導航到旅館" },
+];
+
+/** 後台帳號綁定 LINE：管理者用手機傳「綁定 123456」（後台「圖文選單」頁產生的號碼，10 分鐘內有效） */
+const BIND = /^綁定\s*(\d{6})$/;
+async function bindAdminLine(user: LineUserDoc, text: string, replyToken?: string) {
+  const m = BIND.exec(text.trim());
+  if (!m) return false;
+  const admin = await AdminUser.findOneAndUpdate(
+    { "lineBind.code": m[1], "lineBind.exp": { $gt: new Date() } },
+    { $set: { lineUserId: user._id, lineName: user.displayName, lineBind: null } },
+  ).lean();
+  // 號碼不對或過期：當成一般訊息，交給下面照常處理
+  if (!admin) return false;
+  await send(user._id, replyToken, [
+    textMsg(`已綁定後台帳號（${admin.name || admin.email}）。\n之後在後台「圖文選單」按「傳到我的 LINE 試看看」，新選單會先只出現在這支手機。`),
+  ]);
+  return true;
+}
+
 export async function handleText(user: LineUserDoc, text: string, replyToken?: string) {
   const userId = user._id;
   await LineUser.updateOne({ _id: userId }, { $set: { lastMessageAt: new Date() } });
+  // 綁定後台帳號的號碼不存進對話紀錄、不交給 AI
+  if (BIND.test(text.trim()) && (await bindAdminLine(user, text, replyToken).catch((e) => (console.error("bindAdminLine", e), false)))) return;
   await saveMsg(userId, "user", text);
   // 農場真人接手中：機器人不回，訊息留在後台
   if (botPaused(user)) return;

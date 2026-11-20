@@ -358,6 +358,11 @@ export interface AdminUserDoc {
   /** 一般使用者：在「一般使用者可以看的頁面」之外，這個帳號另外看不到的頁面 */
   hiddenPages: string[];
   lastLoginAt: Date | null;
+  /** 綁定的 LINE（圖文選單「傳到我的 LINE 試看看」用） */
+  lineUserId?: string | null;
+  lineName?: string;
+  /** 綁定中：請使用者用 LINE 傳「綁定 <code>」給官方帳號，exp 前有效 */
+  lineBind?: { code: string; exp: Date } | null;
   createdAt: Date;
 }
 const AdminUserSchema = new Schema<AdminUserDoc>(
@@ -370,10 +375,62 @@ const AdminUserSchema = new Schema<AdminUserDoc>(
     active: { type: Boolean, default: true },
     hiddenPages: { type: [String], default: [] },
     lastLoginAt: { type: Date, default: null },
+    lineUserId: { type: String, default: null },
+    lineName: { type: String, default: "" },
+    lineBind: { type: new Schema({ code: String, exp: Date }, { _id: false }), default: null },
     createdAt: { type: Date, default: () => new Date() },
   },
   { versionKey: false },
 );
+
+/**
+ * 圖文選單（後台「圖文選單」頁換上 LINE 的）。
+ * status：active＝所有客人正在用、history＝換過的（最多留 10 個）、test＝管理者手機試看中
+ * 圖片存在 ll3（image＝檔名，見 ll3-file.ts）；lineId＝LINE 上的 richMenuId（換掉後會刪，換回時重建）
+ */
+export interface RichMenuDoc {
+  _id: string;
+  name: string;
+  /** large6 / large4 / small6 / small3；從 LINE 匯入、格子對不上的是 custom */
+  layout: string;
+  width: number;
+  height: number;
+  image: string;
+  areas: { x: number; y: number; w: number; h: number; type: "message" | "uri"; value: string }[];
+  chatBarText: string;
+  selected: boolean;
+  status: "active" | "history" | "test";
+  lineId: string | null;
+  /** test：試看的人（LINE userId） */
+  testUser?: string | null;
+  appliedAt: Date | null;
+  appliedBy: string;
+  createdAt: Date;
+  createdBy: string;
+}
+const RichMenuSchema = new Schema<RichMenuDoc>(
+  {
+    _id: { type: String, required: true },
+    name: { type: String, default: "" },
+    layout: { type: String, required: true },
+    width: Number,
+    height: Number,
+    image: { type: String, required: true },
+    areas: { type: Schema.Types.Mixed, default: [] },
+    chatBarText: { type: String, default: "選單" },
+    selected: { type: Boolean, default: true },
+    status: { type: String, required: true },
+    lineId: { type: String, default: null },
+    testUser: { type: String, default: null },
+    appliedAt: { type: Date, default: null },
+    appliedBy: { type: String, default: "" },
+    createdAt: { type: Date, default: () => new Date() },
+    createdBy: { type: String, default: "" },
+  },
+  { versionKey: false },
+);
+RichMenuSchema.index({ status: 1, appliedAt: -1 });
+export const RichMenu = (models.RichMenu as Model<RichMenuDoc>) || model<RichMenuDoc>("RichMenu", RichMenuSchema, "richMenus");
 
 /** 後台設定（_id = 設定名稱，例如 pageAccess） */
 const AdminSettingSchema = new Schema({ _id: { type: String, required: true }, allowed: [String] }, { versionKey: false, strict: false });

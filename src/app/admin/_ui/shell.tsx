@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
-import { pageHref, pageLabel, pageOfPath, SYSTEM_HREF, USER_PAGES } from "@/lib/page-access";
+import { pageHref, pageLabel, pageOfPath, RICHMENU_HREF, SYSTEM_HREF, USER_PAGES } from "@/lib/page-access";
 import { Icon, LineLogo, type IconName } from "./icons";
 import { logout, useMe } from "./me";
 
@@ -45,6 +45,7 @@ const NAV: { group: string; items: Item[] }[] = [...new Set(USER_PAGES.map((p) =
 
 /** 只有管理者看得到的選單 */
 const ADMIN_NAV: { group: string; items: Item[] } = { group: "系統", items: [{ href: SYSTEM_HREF, label: "後台管理", icon: "shield" }] };
+const RICHMENU_ITEM: Item = { href: RICHMENU_HREF, label: "圖文選單", icon: "layout" };
 
 /* ---------------- 側邊選單收合狀態，記在這台電腦的瀏覽器 ---------------- */
 function localFlag<T extends string>(key: string, fallback: T) {
@@ -113,7 +114,7 @@ export function Shell({ children }: { children: ReactNode }) {
   // 一般使用者：只顯示後台「頁面權限」開給他的頁面；還沒載入完先全部顯示
   const groups =
     me?.role === "admin"
-      ? [...NAV, ADMIN_NAV]
+      ? [...NAV.map((g) => (g.group === "機器人" ? { ...g, items: [...g.items, RICHMENU_ITEM] } : g)), ADMIN_NAV]
       : NAV.map((g) => ({
           ...g,
           items: g.items.filter((it) => {

@@ -3,6 +3,7 @@ import { createHmac, randomBytes } from "node:crypto";
 /**
  * ll3 主機的檔案 API（https://www.ll3.com.tw/platform/file_api_line.asp，原始碼在 chou-suda-print\platform_change_code）。
  * 問答照片存在主機的 /platform/chou_line/qa/<name>.jpg（資料夾擋掉直接下載），透過 /api/qa-photo/<name>.jpg 轉給 LINE 和後台。
+ * 圖文選單圖片存在 /platform/chou_line/richmenu/<name>.png|jpg，後台透過 /api/admin/richmenu/image 看。
  * 每個請求都用共用金鑰簽章：HMAC-SHA256(LL3_FILE_KEY, a|p|id|n|size|ts)，ts 是 UTC 秒數，10 分鐘內有效。
  */
 
@@ -34,10 +35,10 @@ async function call(url: string, init?: RequestInit) {
   return d;
 }
 
-/** 存一張照片，回傳檔名 */
-export async function putPhoto(bytes: Uint8Array) {
+/** 存一個檔案到 <folder>/<亂數>.<ext>，回傳檔名（不含資料夾） */
+async function putFile(folder: string, ext: string, bytes: Uint8Array) {
   const id = randomBytes(10).toString("hex");
-  const name = `${randomBytes(12).toString("hex")}.jpg`;
+  const name = `${randomBytes(12).toString("hex")}.${ext}`;
   const count = Math.ceil(bytes.length / CHUNK);
   await Promise.all(
     Array.from({ length: count }, (_, k) =>
@@ -48,8 +49,36 @@ export async function putPhoto(bytes: Uint8Array) {
       }),
     ),
   );
-  await call(signed("done", `qa/${name}`, id, "", String(bytes.length)));
+  await call(signed("done", `${folder}/${name}`, id, "", String(bytes.length)));
   return name;
+}
+
+/** 存一張照片，回傳檔名 */
+export const putPhoto = (bytes: Uint8Array) => putFile("qa", "jpg", bytes);
+
+/* ---------- 圖文選單圖片：/platform/chou_line/richmenu/<name>.png|jpg ---------- */
+
+export const MENU_IMAGE_NAME = /^[a-f0-9]{24}\.(png|jpg)$/;
+
+export const putMenuImage = (bytes: Uint8Array, ext: "png" | "jpg") => putFile("richmenu", ext, bytes);
+
+export async function deleteMenuImage(name: string) {
+  if (!MENU_IMAGE_NAME.test(name)) return;
+  await call(signed("del", `richmenu/${name}`));
+}
+
+/** 讀圖文選單圖片；找不到回 null */
+export async function getMenuImage(name: string) {
+  if (!MENU_IMAGE_NAME.test(name)) return null;
+  const res = await fetch(signed("get", `richmenu/${name}`), { cache: "no-store" });
+  if (!res.ok || res.headers.get("content-type")?.startsWith("application/json")) return null;
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+/** ll3 上所有圖文選單圖片（清掉沒用到的用）：檔名與上傳時間（毫秒） */
+export async function listMenuImages() {
+  const d = (await call(signed("list"))) as unknown as { files?: { p: string; t: number }[] };
+  return (d.files ?? []).filter((f) => f.p.startsWith("richmenu/")).map((f) => ({ name: f.p.slice("richmenu/".length), at: f.t * 1000 }));
 }
 
 export async function deletePhoto(name: string) {
