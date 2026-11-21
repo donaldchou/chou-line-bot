@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { pageHref, pageLabel, pageOfPath, RICHMENU_HREF, SYSTEM_HREF, USER_PAGES } from "@/lib/page-access";
-import { Icon, LineLogo, type IconName } from "./icons";
+import { Icon, type IconName } from "./icons";
 import { logout, useMe } from "./me";
 import { PlatformLinks } from "./platform-links";
 
@@ -137,9 +137,11 @@ export function Shell({ children }: { children: ReactNode }) {
           onClick={() => (mini ? setCollapsed(false) : toggleAllGroups(groups.map((g) => g.group)))}
           title={mini ? "展開選單" : allClosed ? "全部展開" : "全部收合"}
           aria-label={mini ? "展開選單" : allClosed ? "全部展開" : "全部收合"}
-          className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-linegreen hover:bg-[#05b14c]"
+          className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl transition hover:brightness-110"
         >
-          <LineLogo />
+          {/* 平台自己的分頁圖示（favicon） */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/platforms/chou-line-bot.svg" width={40} height={40} alt="" className="block" />
         </button>
         {!mini && (
           <div className="min-w-0">
