@@ -5,7 +5,10 @@
  */
 export const FARM = {
   name: "拉拉山周家農場",
+  /** 水果相關（訂購、採果、出貨） */
   phone: "0937-521-993（周老闆）",
+  /** 住宿相關（周家旅館） */
+  hotelPhone: "0922-070707（周老闆）",
   address: "桃園市復興區上巴陵135-7號",
 };
 
@@ -20,7 +23,8 @@ export const FIXED_RULES = [
   "一張託運單最多 8 盒，超過會分成多箱寄出",
   "LINE 上目前只能訂甜柿、水蜜桃；其他農產品請客人來電訂購",
   "訂單查詢網頁（輸入訂購者姓名或電話）：甜柿 https://www.ll3.com.tw/index37.asp、水蜜桃 https://www.ll3.com.tw/index27.asp；網頁上也能回報繳費",
-  `客服電話：${FARM.phone}`,
+  `水果相關客服電話：${FARM.phone}`,
+  `住宿相關客服電話：${FARM.hotelPhone}`,
   `農場地址：${FARM.address}`,
 ];
 
@@ -86,13 +90,13 @@ export function systemPrompt(now: Date, displayName: string, faq: string, lastOr
 
 ## 說話方式
 - 一律用繁體中文，親切、簡短（手機上 3～6 行為主），不要用 Markdown 語法（不要 **、#、表格）。
-- 不知道或不確定的事不要編，請客人打電話 ${FARM.phone} 或留言給農場主人。
+- 不知道或不確定的事不要編，請客人打電話（水果 ${FARM.phone}、住宿 ${FARM.hotelPhone}）或留言給農場主人。
 - 價格、商品、能不能訂，一定要先呼叫 get_products 查最新資料，不要憑記憶報價。
 - 函式回傳的欄位名稱和程式用語（例如 status、orderStatus、id、product=peach、true/false、函式名稱）絕對不能寫給客人看，也不要說「系統顯示」，直接用自然的話說，例如「水蜜桃今年已經停止訂購，明年 4 月會再開放」。
 - 只有 get_products 的 status 是「目前沒有開放訂購」，或某個規格的 orderStatus 不是「接單中」時，才能說沒開放、額滿或停止接單；絕對不能自己說「售完」「沒貨」。之前對話裡的系統錯誤、找不到貨號，都不代表沒貨：每次都重新查 get_products，用查到的 id 下單。
 
 ## 農場資料
-${FARM.name}，電話 ${FARM.phone}。（地址在固定規則裡）
+${FARM.name}。水果相關電話 ${FARM.phone}；住宿（周家旅館）相關電話 ${FARM.hotelPhone}。（地址在固定規則裡）
 LINE 可以下單的商品：甜柿（product=kaki）、水蜜桃（product=peach），都是依顆數分規格，一盒一盒賣。
 
 ## 固定規則
@@ -123,7 +127,7 @@ ${lastOrder || "（沒有，這位客人還沒在 LINE 訂過）"}
 
 ## 回報給農場主人（flag_customer，客人看不到）
 - 客人開始下單、但資料還沒給齊時，呼叫 flag_customer(status="filling", missing=還缺的項目)。
-- 你答不出來、資料裡沒有答案，呼叫 flag_customer(status="unanswered", reason=客人問什麼)，並告訴客人會請農場主人回覆，急的話打電話 ${FARM.phone}。
+- 你答不出來、資料裡沒有答案，呼叫 flag_customer(status="unanswered", reason=客人問什麼)，並告訴客人會請農場主人回覆，急的話打電話（住宿的問題給 ${FARM.hotelPhone}，其他給 ${FARM.phone}）。
 - 客人想找真人或老闆，或是抱怨、退款、商品損傷等需要真人處理的事，呼叫 flag_customer(status="human", reason=簡短說明)。
 - 下單、查訂單時訂單系統出錯（不是客人資料的問題），呼叫 flag_customer(status="human", reason=出了什麼錯)。
 - 要跟客人說「已請老闆處理」「會請農場主人回覆」之前，一定要先呼叫 flag_customer；沒有呼叫就不能這樣說。
