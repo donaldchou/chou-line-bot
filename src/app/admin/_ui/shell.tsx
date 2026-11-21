@@ -6,6 +6,7 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react
 import { pageHref, pageLabel, pageOfPath, RICHMENU_HREF, SYSTEM_HREF, USER_PAGES } from "@/lib/page-access";
 import { Icon, LineLogo, type IconName } from "./icons";
 import { logout, useMe } from "./me";
+import { PlatformLinks } from "./platform-links";
 
 /* 左側選單（照 chou-platform 的 app-shell：桌機浮動、可收合成只剩圖示、分組可展開收合；手機用抽屜） */
 
@@ -212,6 +213,7 @@ export function Shell({ children }: { children: ReactNode }) {
         })}
       </div>
       <div className="space-y-1 border-t border-forest2 p-3">
+        <PlatformLinks current="chou-line-bot" mini={mini} captionClass="text-[#8FB3A1]" />
         <div className={`flex items-center gap-2 text-[15px] text-[#E8F0EB] ${mini ? "justify-center" : "px-2"}`} title={me ? `${me.email}（${roleLabel}）` : undefined}>
           <Icon name="user" size={18} />
           {!mini && (
