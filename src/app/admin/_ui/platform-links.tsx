@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * 左側選單底部（使用者上方）：周家四個平台的圖示，點了開新分頁到那個平台。
- * 四個專案（chou-platform、chou-partner、chou-line-bot、chou-weather）各放一份同樣的檔案，只有 current 不同。
+ * 左側選單底部（使用者上方）：周家五個平台的圖示，點了開新分頁到那個平台。
+ * 五個專案（chou-platform、chou-partner、chou-line-bot、chou-weather、chou-watercontrol）各放一份同樣的檔案，只有 current 不同。
  * 圖示檔在各專案的 public/platforms/<id>.svg（和各平台自己的分頁圖示相同）。
  */
 export const PLATFORMS = [
@@ -10,16 +10,17 @@ export const PLATFORMS = [
   { id: "chou-partner", name: "客戶管理系統", url: "https://chou-partner.vercel.app" },
   { id: "chou-line-bot", name: "LINE 客服", url: "https://chou-line-bot.vercel.app/admin" },
   { id: "chou-weather", name: "上巴陵天氣", url: "https://chou-weather.vercel.app" },
+  { id: "chou-watercontrol", name: "果園水肥控制", url: "https://chou-watercontrol.vercel.app" },
 ] as const;
 
 export type PlatformId = (typeof PLATFORMS)[number]["id"];
 
 export function PlatformLinks({ current, mini, captionClass }: { current: PlatformId; mini: boolean; captionClass: string }) {
-  const size = mini ? 28 : 34;
+  const size = mini ? 28 : 32; // 五個圖示要放得進最窄的選單（LINE 客服 w-60）
   return (
     <div className={mini ? "pb-2" : "px-2 pb-2"}>
       {!mini && <div className={`mb-1.5 text-xs ${captionClass}`}>周家平台（點了開新分頁）</div>}
-      <div className={mini ? "flex flex-col items-center gap-2" : "flex gap-2.5"}>
+      <div className={mini ? "flex flex-col items-center gap-2" : "flex gap-2"}>
         {PLATFORMS.map((p) =>
           p.id === current ? (
             <span
