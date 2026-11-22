@@ -50,8 +50,8 @@ export default function LoginPage() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/icon.svg" width={40} height={40} alt="" className="block" />
           <div className="flex flex-col">
-            <h1 className="text-lg font-bold">周家農場 LINE 客服後台</h1>
-            <span className="text-sm text-mute">{setup ? "第一次使用：建立管理者帳號" : "請用 email 和密碼登入"}</span>
+            <h1 className="text-lg font-bold">CHOU 農場平台</h1>
+            <span className="text-sm text-mute">{setup ? "第一次使用：建立管理者帳號" : "LINE 客服"}</span>
           </div>
         </div>
         {setup && (

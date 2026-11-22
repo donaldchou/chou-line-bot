@@ -145,7 +145,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </button>
         {!mini && (
           <div className="min-w-0">
-            <div className="truncate text-base font-bold leading-tight text-white">周家農場</div>
+            <div className="truncate text-base font-bold leading-tight text-white">CHOU 農場平台</div>
             <div className="text-xs text-[#A9C4B6]">LINE 客服後台</div>
           </div>
         )}
@@ -272,7 +272,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <button type="button" onClick={() => setOpen(true)} aria-label="開啟選單" className="flex h-11 w-11 items-center justify-center text-ink">
             <Icon name="menu" size={24} />
           </button>
-          <span className="text-lg font-bold">周家農場 LINE 客服</span>
+          <span className="text-lg font-bold">CHOU 農場平台 LINE 客服</span>
         </header>
         <PageGuard pathname={pathname}>{children}</PageGuard>
       </div>
